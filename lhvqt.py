@@ -2,7 +2,7 @@ import numpy as np
 import librosa
 import torch
 
-DEFAULT_DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+from .constants import *
 
 class LHVQT(torch.nn.Module):
     def __init__(self, fs = 22050, harmonics = [0.5, 1, 2, 3, 4, 5], hop_length = 256, fmin = None,
@@ -64,7 +64,9 @@ class LHVQT(torch.nn.Module):
             torch.nn.Sequential(*list(self.tfs.children()))[h].norm_weights()
 
 class LVQT(torch.nn.Module):
-    def __init__(self, fs = 22050, hop_length = 256, fmin = None, n_bins = 360, bins_per_octave = 60, filter_scale = 1, gamma = 0, norm = 1, window = 'hann', scale = True, norm_length = True, random = False, max_p = 1):
+    def __init__(self, fs = 22050, hop_length = 256, fmin = None, n_bins = 360,
+                 bins_per_octave = 60, filter_scale = 1, gamma = 0, norm = 1,
+                 window = 'hann', scale = True, norm_length = True, random = False, max_p = 1):
         super(LVQT, self).__init__()
 
         if fmin is None:
@@ -115,7 +117,9 @@ class LVQT(torch.nn.Module):
     def forward(self, wav):
         missing = self.hop_length - (wav.size(-1) % self.hop_length)
         if (missing != self.hop_length):
-            wav = torch.cat((wav, torch.zeros(missing).unsqueeze(0).unsqueeze(0).to(DEFAULT_DEVICE)), dim=-1)
+            remaining = np.expand_dims(np.zeros(missing), 0)
+            remaining = torch.Tensor([remaining] * wav.size(0)).to(DEFAULT_DEVICE)
+            wav = torch.cat((wav, remaining), dim=-1)
         num_frames = (wav.size(-1) - 1) // self.hop_length + 1
         C = self.time_conv(wav)
         C = self.l2_pool(C.transpose(1, 2)).transpose(1, 2)
