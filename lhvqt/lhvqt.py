@@ -56,11 +56,6 @@ class LHVQT(torch.nn.Module):
         hcqts = hcqts.transpose(1, 0)
         return hcqts
 
-    def norm_weights(self):
-        for h in range(len(self.harmonics)):
-            # Normalize the weights at each harmonic
-            torch.nn.Sequential(*list(self.tfs.children()))[h].norm_weights()
-
 class LVQT(torch.nn.Module):
     def __init__(self, fs = 22050, hop_length = 256, fmin = None, n_bins = 360,
                  bins_per_octave = 60, filter_scale = 1, gamma = 0, norm = 1,
@@ -84,29 +79,27 @@ class LVQT(torch.nn.Module):
         self.scale = scale
         self.norm_length = norm_length
         self.random = random
+        self.max_p = max_p
 
         # Get complex bases with log center frequencies and their respective lengths
-        basis, self.lengths = variable_q(fs, fmin, n_bins, bins_per_octave, 0,
+        self.basis, self.lengths = variable_q(fs, fmin, n_bins, bins_per_octave, 0,
                                          window, filter_scale, gamma, False, norm)
 
-        # Split the complex valued bases into real and imaginary weights
-        real_weights, imag_weights = np.real(basis), np.imag(basis)
-        # Stack them together into one representation
-        complex_weights = np.array([[real_weights[i]] + [imag_weights[i]] for i in range(n_bins)])
-        complex_weights = np.reshape(complex_weights, (2 * n_bins, basis.shape[1]))
+        # Get the real weights from the complex valued bases
+        real_weights = np.real(self.basis)
 
         # Create the convolutional filterbank with the weights
-        self.time_conv = torch.nn.Conv1d(1, 2 * n_bins, basis.shape[1], hop_length // max_p,
-                                         basis.shape[1] // 2, bias = False)
+        self.time_conv = torch.nn.Conv1d(1, n_bins, self.basis.shape[1], hop_length // max_p, self.basis.shape[1] // 2, bias = False)
 
         if random:
             # Weights are initialized randomly by default - but they must be normalized
-            self.norm_weights()
+            pass
         else:
             # If CQT/VQT initialization is desired, manually set the Conv1d parameters with the complex weights
-            self.time_conv.weight = torch.nn.Parameter(torch.Tensor(complex_weights).unsqueeze(1))
+            self.time_conv.weight = torch.nn.Parameter(torch.Tensor(real_weights).unsqueeze(1))
 
-        # Initialize L2 pooling to recombine separate real/imag filter channels into complex coefficients
+        # Initialize L2 pooling to recombine separate real/imag filter channels into complex coefficients.
+        # while also dealing with bad gradients when the power is zero
         self.l2_pool = torch.nn.LPPool1d(norm_type = 2, kernel_size = 2, stride = 2)
 
         self.mp = torch.nn.MaxPool1d(max_p)
@@ -119,8 +112,12 @@ class LVQT(torch.nn.Module):
             remaining = torch.Tensor([remaining] * wav.size(0)).to(wav.device)
             wav = torch.cat((wav, remaining), dim=-1)
         num_frames = (wav.size(-1) - 1) // self.hop_length + 1
-        C = self.time_conv(wav)
-        C = self.l2_pool(C.transpose(1, 2)).transpose(1, 2)
+        C_real = self.time_conv(wav)
+        C_real_weights = self.time_conv.weight
+        C_imag_weights = torch_hilbert(C_real_weights)[:, :, :, 1]
+        C_imag = torch.nn.functional.conv1d(wav, C_imag_weights, None, self.hop_length // self.max_p, self.basis.shape[1] // 2)
+        C = torch.cat((C_real.view(C_real.size(0), -1).unsqueeze(-1), C_imag.view(C_imag.size(0), -1).unsqueeze(-1)), dim = -1)
+        C = self.l2_pool(C).view(C_real.size())
 
         if self.norm_length:
             # Compensate for different filter lengths of CQT/VQT
@@ -132,14 +129,6 @@ class LVQT(torch.nn.Module):
 
         C = self.bn(take_log(self.mp(C)))
         return C[:, :, :num_frames]
-
-    def norm_weights(self):
-        with torch.no_grad():
-            complex_weights = self.time_conv.weight.view(self.n_bins, 2, -1)
-            abs_weights = torch.sqrt(complex_weights[:, 0] ** 2 + complex_weights[:, 1] ** 2)
-            divisor = torch.sum(abs_weights, dim = 1).unsqueeze(1).repeat(2, 1, abs_weights.size(1)).transpose(0, 1)
-            norm_weights = complex_weights / divisor
-            self.time_conv.weight = torch.nn.Parameter(norm_weights.view(2 * self.n_bins, 1, -1))
 
 """
 This was adapted from the Librosa contant_q function. The only new parameter
@@ -302,3 +291,24 @@ def take_log(tfr, amin = (1e-5) ** 2, top_db = 80.0):
         tfr = tfr.contiguous().view(batch_size, h_size, tfr.size(1), tfr.size(2))
 
     return tfr
+
+def torch_hilbert(x, N = None):
+    if N is None:
+        N = x.size(-1)
+    if N <= 0:
+        raise ValueError("N must be positive.")
+
+    zs = torch.zeros(x.size()).to(x.device)
+    x = torch.cat((x.unsqueeze(-1), zs.unsqueeze(-1)), dim = -1)
+    Xf = torch.fft(x, signal_ndim = 1)
+    h = torch.zeros(N)
+    if N % 2 == 0:
+        h[0] = h[N // 2] = 1
+        h[1 : N // 2] = 2
+    else:
+        h[0] = 1
+        h[1 : (N + 1) // 2] = 2
+
+    h = h.unsqueeze(0).unsqueeze(0).unsqueeze(-1).to(x.device)
+    x = torch.ifft(Xf * h, signal_ndim = 1)
+    return x
