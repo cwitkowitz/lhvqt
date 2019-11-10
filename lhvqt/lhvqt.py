@@ -2,8 +2,6 @@ import numpy as np
 import librosa
 import torch
 
-from .constants import *
-
 class LHVQT(torch.nn.Module):
     def __init__(self, fs = 22050, harmonics = [0.5, 1, 2, 3, 4, 5], hop_length = 256, fmin = None,
                        n_bins = 360, bins_per_octave = 60, filter_scale = 1, gamma = 0, norm = 1,
@@ -118,7 +116,7 @@ class LVQT(torch.nn.Module):
         missing = self.hop_length - (wav.size(-1) % self.hop_length)
         if (missing != self.hop_length):
             remaining = np.expand_dims(np.zeros(missing), 0)
-            remaining = torch.Tensor([remaining] * wav.size(0)).to(DEFAULT_DEVICE)
+            remaining = torch.Tensor([remaining] * wav.size(0)).to(wav.device)
             wav = torch.cat((wav, remaining), dim=-1)
         num_frames = (wav.size(-1) - 1) // self.hop_length + 1
         C = self.time_conv(wav)
@@ -126,11 +124,11 @@ class LVQT(torch.nn.Module):
 
         if self.norm_length:
             # Compensate for different filter lengths of CQT/VQT
-            C *= torch.Tensor(self.lengths[np.newaxis, :, np.newaxis]).to(DEFAULT_DEVICE)
+            C *= torch.Tensor(self.lengths[np.newaxis, :, np.newaxis]).to(wav.device)
 
         if self.scale:
             # Scale the CQT response by square-root the length of each channel’s filter
-            C /= torch.sqrt(torch.Tensor(self.lengths)).unsqueeze(1).to(DEFAULT_DEVICE)
+            C /= torch.sqrt(torch.Tensor(self.lengths)).unsqueeze(1).to(wav.device)
 
         C = self.bn(take_log(self.mp(C)))
         return C[:, :, :num_frames]
