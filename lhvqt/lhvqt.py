@@ -1,3 +1,5 @@
+from librosa.filters import *
+
 import numpy as np
 import librosa
 import torch
@@ -5,7 +7,8 @@ import torch
 class LHVQT(torch.nn.Module):
     def __init__(self, fs = 22050, harmonics = [0.5, 1, 2, 3, 4, 5], hop_length = 256, fmin = None,
                        n_bins = 360, bins_per_octave = 60, filter_scale = 1, gamma = 0, norm = 1,
-                       window = 'hann', scale = True, norm_length = True, random = False, max_p = 1):
+                       window = 'hann', scale = True, norm_length = True, random = False, max_p = 1,
+                       log = True, batch_norm = True, log_scale = True):
         super(LHVQT, self).__init__()
 
         if fmin is None:
@@ -26,6 +29,10 @@ class LHVQT(torch.nn.Module):
         self.scale = scale
         self.norm_length = norm_length
         self.random = random
+        self.max_p = max_p
+        self.log = log
+        self.batch_norm = batch_norm
+        self.log_scale = log_scale
 
         # Add CQTs as elements of a Torch module
         self.tfs = torch.nn.Module()
@@ -35,7 +42,8 @@ class LHVQT(torch.nn.Module):
             self.tfs.add_module(mod_name,
                                 LVQT(fs, hop_length, fmin * float(h), n_bins,
                                      bins_per_octave, filter_scale, gamma, norm,
-                                     window, scale, norm_length, random, max_p))
+                                     window, scale, norm_length, random, max_p,
+                                     log, batch_norm, log_scale))
 
     def forward(self, wav):
         # Lists to hold cqts and shapes of cqts
@@ -59,7 +67,8 @@ class LHVQT(torch.nn.Module):
 class LVQT(torch.nn.Module):
     def __init__(self, fs = 22050, hop_length = 256, fmin = None, n_bins = 360,
                  bins_per_octave = 60, filter_scale = 1, gamma = 0, norm = 1,
-                 window = 'hann', scale = True, norm_length = True, random = False, max_p = 1):
+                 window = 'hann', scale = True, norm_length = True, random = False,
+                 max_p = 1, log = True, batch_norm = True, log_scale = True):
         super(LVQT, self).__init__()
 
         if fmin is None:
@@ -80,16 +89,20 @@ class LVQT(torch.nn.Module):
         self.norm_length = norm_length
         self.random = random
         self.max_p = max_p
+        self.log = log
+        self.batch_norm = batch_norm
+        self.log_scale = log_scale
 
         # Get complex bases with log center frequencies and their respective lengths
-        self.basis, self.lengths = variable_q(fs, fmin, n_bins, bins_per_octave, 0,
-                                         window, filter_scale, gamma, False, norm)
+        self.basis, self.lengths = constant_q(fs, fmin, n_bins, bins_per_octave, 0,
+                                              window, filter_scale, gamma, False, norm)
 
         # Get the real weights from the complex valued bases
         real_weights = np.real(self.basis)
 
         # Create the convolutional filterbank with the weights
-        self.time_conv = torch.nn.Conv1d(1, n_bins, self.basis.shape[1], hop_length // max_p, self.basis.shape[1] // 2, bias = False)
+        self.time_conv = torch.nn.Conv1d(1, n_bins, self.basis.shape[1],
+                                         hop_length // max_p, self.basis.shape[1] // 2, bias = False)
 
         if random:
             # Weights are initialized randomly by default - but they must be normalized
@@ -127,111 +140,15 @@ class LVQT(torch.nn.Module):
             # Scale the CQT response by square-root the length of each channel’s filter
             C /= torch.sqrt(torch.Tensor(self.lengths)).unsqueeze(1).to(wav.device)
 
-        C = self.bn(take_log(self.mp(C)))
+        C = self.mp(C)
+
+        if self.log:
+            C = take_log(C, scale = self.log_scale)
+
+        if self.batch_norm:
+            C = self.bn(C)
+
         return C[:, :, :num_frames]
-
-"""
-This was adapted from the Librosa contant_q function. The only new parameter
-is gamma, which is passed to variable_q_lengths. Setting gamma = 0 will result
-in constant-q filters, whereas positive gamma will slowly decrease Q-factor at
-lower frequencies.
-"""
-def variable_q(sr, fmin = None, n_bins = 84, bins_per_octave = 12, tuning = 0.0,
-               window = 'hann', filter_scale = 1, gamma = 0, pad_fft = True, norm = 1,
-               dtype = np.complex64, **kwargs):
-
-    if fmin is None:
-        fmin = librosa.note_to_hz('C1')
-
-    # Pass-through parameters to get the filter lengths (assuming constant-q)
-    lengths = variable_q_lengths(sr, fmin, n_bins = n_bins, bins_per_octave = bins_per_octave,
-                                 tuning = tuning, window = window, filter_scale = filter_scale,
-                                 gamma = 0)
-
-    # Apply tuning correction
-    correction = 2.0 ** (float(tuning) / bins_per_octave)
-    fmin = correction * fmin
-
-    # Q should be capitalized here, so we suppress the name warning
-    # pylint: disable=invalid-name
-    Q = float(filter_scale) / (2.0 ** (1. / bins_per_octave) - 1)
-
-    # Convert lengths back to frequencies (constant-q)
-    freqs = Q * sr / lengths
-
-    # Recalculate the lengths in case gamma is nonzero (variable-q)
-    lengths = variable_q_lengths(sr, fmin, n_bins = n_bins, bins_per_octave = bins_per_octave,
-                                 tuning = tuning, window = window, filter_scale = filter_scale,
-                                 gamma = gamma)
-
-    # Build the filters
-    filters = []
-    for ilen, freq in zip(lengths, freqs):
-        # Build the filter: note, length will be ceil(ilen)
-        sig = np.exp(np.arange(-ilen // 2, ilen // 2, dtype = float) * 1j * 2 * np.pi * freq / sr)
-
-        # Apply the windowing function
-        sig = sig * librosa.filters.__float_window(window)(len(sig))
-
-        # Normalize
-        sig = librosa.util.normalize(sig, norm = norm)
-
-        filters.append(sig)
-
-    # Pad and stack
-    max_len = max(lengths)
-    if pad_fft:
-        max_len = int(2.0 ** (np.ceil(np.log2(max_len))))
-    else:
-        max_len = int(np.ceil(max_len))
-
-    filters = np.asarray([librosa.util.pad_center(filt, max_len, **kwargs) for filt in filters], dtype = dtype)
-
-    return filters, np.asarray(lengths)
-
-"""
-This was adapted from the Librosa contant_q_lengths function. The only new
-parameter is gamma, which varies the Q-factor at lower frequencies. In this
-context, Q is a vector used to calculate the filter length of each channel.
-It is important to note that the center frequencies of each channel still
-align with a constant Q-factor. That is, they are logarithmically spaced
-by a factor of  (2.0 ** (1 / bins_per_octave)).
-"""
-def variable_q_lengths(sr, fmin, n_bins = 84, bins_per_octave = 12,
-                       tuning = 0.0, window = 'hann', filter_scale = 1,
-                       gamma = 0):
-    if fmin <= 0:
-        raise Exception('fmin must be positive')
-    if gamma < 0:
-        raise Exception('gamma must be positive')
-    if bins_per_octave <= 0:
-        raise Exception('bins_per_octave must be positive')
-    if filter_scale <= 0:
-        raise Exception('filter_scale must be positive')
-    if n_bins <= 0 or not isinstance(n_bins, int):
-        raise Exception('n_bins must be a positive integer')
-
-    correction = 2.0 ** (float(tuning) / bins_per_octave)
-
-    fmin = correction * fmin
-
-    # Calculate the constant Q-factor
-    Q = float(filter_scale) / (2.0 ** (1. / bins_per_octave) - 1)
-
-    # Compute the constant-q frequencies
-    freq = fmin * (2.0 ** (np.arange(n_bins, dtype = float) / bins_per_octave))
-
-    # Determine if support of maximum center frequency is possible
-    if freq[-1] * (1 + 0.5 * librosa.filters.window_bandwidth(window) / Q) > sr / 2.0:
-        raise Exception('Filter pass-band lies beyond Nyquist')
-
-    # Calculate the Q factor of each frequency channel
-    Q = freq * float(filter_scale) / ((2.0 ** (1. / bins_per_octave) - 1) * freq + gamma)
-
-    # Convert frequencies to filter lengths
-    lengths = Q * sr / freq
-
-    return lengths
 
 """
 Take the log of a time-frequency representation using differentiable
@@ -242,7 +159,7 @@ Expected input: batch x harmonic x frequency x time
                               OR
                 batch x frequency x time
 """
-def take_log(tfr, amin = (1e-5) ** 2, top_db = 80.0):
+def take_log(tfr, amin = (1e-5) ** 2, top_db = 80.0, scale = True):
     if len(tfr.size()) != 4 and len(tfr.size()) != 3:
         raise Exception('Expected input - B x H x F x T OR B x F x T')
 
@@ -283,8 +200,9 @@ def take_log(tfr, amin = (1e-5) ** 2, top_db = 80.0):
     log_tfr[log_tfr < newVals] = newVals.repeat(1, log_tfr.size(-1))[log_tfr < newVals]
 
     # Scale values and offset to be between 0 and 1
-    tfr = (log_tfr / top_db) + 1.0
-    tfr = tfr.view(magnitude.size())
+    if scale:
+        log_tfr = (log_tfr / top_db) + 1.0
+    tfr = log_tfr.view(magnitude.size())
 
     if h_size is not None:
         # Match input dimensions to original HCQT
