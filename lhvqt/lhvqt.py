@@ -94,8 +94,15 @@ class LVQT(torch.nn.Module):
         self.log_scale = log_scale
 
         # Get complex bases with log center frequencies and their respective lengths
-        self.basis, self.lengths = constant_q(fs, fmin, n_bins, bins_per_octave, 0,
-                                              window, filter_scale, gamma, False, norm)
+        self.basis, self.lengths = constant_q(sr=self.fs,
+                                              fmin=self.fmin,
+                                              n_bins=self.n_bins,
+                                              bins_per_octave=self.bins_per_octave,
+                                              window=self.window,
+                                              filter_scale=self.filter_scale,
+                                              pad_fft=False,
+                                              norm=self.norm,
+                                              gamma=self.gamma)
 
         # Get the real weights from the complex valued bases
         real_weights = np.real(self.basis)
