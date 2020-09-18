@@ -5,7 +5,7 @@ import numpy as np
 import librosa
 import torch
 
-from lhvqt import *
+from lhvqt.lhvqt import *
 
 
 def similarity(A, B):
