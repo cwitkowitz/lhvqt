@@ -5,7 +5,7 @@ import numpy as np
 import librosa
 import torch
 
-from lhvqt.lhvqt import *
+from lhvqt.lvqt_orig import *
 
 
 def similarity(A, B):
@@ -24,7 +24,7 @@ def main():
     ax1.set_title('Variable-Q power spectrum (Librosa)')
 
     plt.sca(ax2)
-    vqt = LVQT(sr, gamma=5, batch_norm=False, log_scale=False,
+    vqt = LVQT(fs=sr, gamma=5, db_to_prob=False, batch_norm=False,
                bins_per_octave=12, n_bins=60)(torch.Tensor([[y]]))
     vqt = vqt[0].cpu().detach().numpy()
     specshow(vqt, sr=sr, x_axis='time', y_axis='cqt_hz')
