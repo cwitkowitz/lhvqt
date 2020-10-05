@@ -56,7 +56,7 @@ class LVQT(_LVQT):
             # View the real/imag channels as independent filters
             complex_weights = torch.Tensor(complex_weights).view(nf_out, 1, ks1)
             # Manually set the Conv1d parameters with the real/imag weights
-            self.time_conv.weight = torch.nn.Parameter(complex_weights + 1e-10)
+            self.time_conv.weight = torch.nn.Parameter(complex_weights)
 
         # Initialize l2 pooling to recombine real/imag filter channels
         self.l2_pool = torch.nn.LPPool1d(norm_type=2, kernel_size=2, stride=2)
@@ -94,9 +94,6 @@ class LVQT(_LVQT):
         feats = self.l2_pool(feats)
         # Switch the frame and filter dimension back
         feats = feats.transpose(1, 2)
-
-        #feats *= torch.Tensor(self.lengths[np.newaxis, :, np.newaxis]).to(audio.device)
-        #feats /= torch.sqrt(torch.Tensor(self.lengths)).unsqueeze(1).to(audio.device)
 
         # Perform post-processing steps
         feats = self.post_proc(feats)
@@ -167,49 +164,3 @@ class LVQT(_LVQT):
         imag_weights = self.get_imag_weights()
         mag_weights = torch.sqrt(real_weights ** 2 + imag_weights ** 2)
         return mag_weights
-
-    def norm_feats(self, feats):
-        """
-        Normalize the features based on the l2 norm of filter weights.
-
-        Parameters
-        ----------
-        feats : Tensor (B x F x T)
-          Features calculated for a batch of tracks,
-          B - batch size
-          F - dimensionality of features (number of bins)
-          T - number of time steps (frames)
-
-        Returns
-        ----------
-        feats : Tensor (B x F x T)
-          Normalized features for a batch of track.
-        """
-
-        # TODO - this produces NaNs in the gradient somehow - fixed by adding epsilon to zero weights?
-        mag_weights = self.get_mag_weights()
-        # Get the l2 norm of the weight magnitude
-        norm = torch.norm(mag_weights, p=2, dim=1, keepdim=True)
-        #norm = torch.zeros(norm.size()).to(feats.device)
-        # Divide the features by the norm
-        feats = torch.div(feats, norm)
-
-        return feats
-
-    def norm_weights(self):
-        """
-        Normalize the weights based on the l1 norm of filter weights.
-        """
-
-        # Turn off gradient management
-        with torch.no_grad():
-            complex_weights = self.get_comp_weights()
-            mag_weights = self.get_mag_weights()
-            # Calculate the l1 norm of the magnitude weights
-            norm = torch.norm(mag_weights, p=1, dim=1, keepdim=True).unsqueeze(-1)
-            # Normalize the complex weights
-            norm_weights = complex_weights / norm
-            # Re-zip the weights
-            norm_weights = norm_weights.view(2 * self.n_bins, 1, -1)
-            # Insert the new weights into the 1D conv layer
-            self.time_conv.weight = torch.nn.Parameter(norm_weights)

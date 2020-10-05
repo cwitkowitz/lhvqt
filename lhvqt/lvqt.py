@@ -115,9 +115,6 @@ class _LVQT(torch.nn.Module):
           Post-processed features for a batch of track.
         """
 
-        # Normalize the filterbank features
-        #feats = self.norm_feats(feats)
-
         # Perform max pooling operation
         feats = self.mp(feats)
 
@@ -133,30 +130,6 @@ class _LVQT(torch.nn.Module):
             feats = self.bn(feats)
 
         return feats
-
-    @abstractmethod
-    def norm_feats(self, feats):
-        """
-        Perform the main processing steps for the filterbank.
-
-        Parameters
-        ----------
-        feats : Tensor (B x F x T)
-          Features calculated for a batch of tracks,
-          B - batch size
-          F - dimensionality of features (number of bins)
-          T - number of time steps (frames)
-        """
-
-        return NotImplementedError
-
-    @abstractmethod
-    def norm_weights(self):
-        """
-        Perform any steps to normalize output.
-        """
-
-        return NotImplementedError
 
     # TODO - make padding for extra frame optional with self.pad param and put padding
     #        into forward of this abstract class - it will also affect expected frames
@@ -176,7 +149,7 @@ class _LVQT(torch.nn.Module):
         remaining = self.hop_length - ((audio.shape[-1]) % self.hop_length)
 
         # If there are trailing samples...
-        if (remaining != self.hop_length):
+        if remaining != self.hop_length:
             # Pad the audio with zeros to fill the remaining samples
             shape = tuple(audio.shape[:-1]) + tuple([remaining])
             filler = torch.zeros(shape).to(audio.device)

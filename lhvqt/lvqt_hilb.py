@@ -113,9 +113,6 @@ class LVQT(_LVQT):
         # Switch the frame and filter dimension back
         feats = feats.transpose(1, 2)
 
-        #feats *= torch.Tensor(self.lengths[np.newaxis, :, np.newaxis]).to(audio.device)
-        #feats /= torch.sqrt(torch.Tensor(self.lengths)).unsqueeze(1).to(audio.device)
-
         # Perform post-processing steps
         feats = self.post_proc(feats)
 
