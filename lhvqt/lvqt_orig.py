@@ -44,10 +44,7 @@ class LVQT(_LVQT):
                                          padding=0,
                                          bias=False)
 
-        if self.random:
-            # Weights are initialized randomly by default - but they must be normalized
-            self.norm_weights()
-        else:
+        if not self.random:
             # Split the complex valued bases into real and imaginary weights
             real_weights, imag_weights = np.real(self.basis), np.imag(self.basis)
             # Zip them together as separate channels so both components of each filter are adjacent

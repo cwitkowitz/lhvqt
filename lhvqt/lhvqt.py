@@ -100,19 +100,6 @@ class LHVQT(torch.nn.Module):
 
         return feats
 
-    def norm_weights(self):
-        """
-        Normalize each lower-level module independently.
-        """
-
-        # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
-
-        # Loop through harmonics
-        for h in range(len(self.harmonics)):
-            # Normalize the weights of each filter
-            lvqt_modules[h].norm_weights()
-
     def get_expected_frames(self, audio):
         """
         Determine the number of frames we expect from provided audio.

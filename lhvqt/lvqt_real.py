@@ -11,8 +11,7 @@ import torch
 
 class LVQT(_LVQT):
     """
-    Implements an extension of the original LVQT module. In this version, the imaginary
-    weights of the transform are inferred from the real weights by using the Hilbert transform.
+    Implements an extension of the original LVQT module. In this version, only the real channel is used.
     """
 
     def __init__(self, **kwargs):
@@ -55,9 +54,6 @@ class LVQT(_LVQT):
             # Manually set the Conv1d parameters with the real/imag weights
             self.time_conv.weight = torch.nn.Parameter(real_weights)
 
-        # Initialize l2 pooling to recombine real/imag filter channels
-        self.l2_pool = torch.nn.LPPool1d(norm_type=2, kernel_size=2, stride=2)
-
     def forward(self, audio):
         """
         Perform the main processing steps for the filterbank.
@@ -84,31 +80,7 @@ class LVQT(_LVQT):
         # layer to allow for different front/back padding
         padded_audio = torch.nn.functional.pad(audio, self.pd1)
         # Convolve the audio with the filterbank of real weights
-        real_feats = self.time_conv(padded_audio)
-
-        # Obtain the imaginary weights
-        imag_weights = self.get_imag_weights().unsqueeze(1)
-        # Convolve the audio with the filterbank of imaginary weights
-        imag_feats = torch.nn.functional.conv1d(padded_audio,
-                                                weight=imag_weights,
-                                                stride=self.sd1,
-                                                padding=0)
-
-        # Add an extra dimension to both sets of features
-        real_feats = real_feats.unsqueeze(-1)
-        imag_feats = imag_feats.unsqueeze(-1)
-
-        # Concatenate the features along a new dimension
-        feats = torch.cat((real_feats, imag_feats), dim=-1)
-        # Switch filter and frame dimension
-        feats = feats.transpose(1, 2)
-        # Collapse the last dimension to zip the features
-        # and make the real/imag responses adjacent
-        feats = feats.reshape(tuple(list(feats.shape[:-2]) + [-1]))
-        # Perform l2 pooling across the filter dimension
-        feats = self.l2_pool(feats)
-        # Switch the frame and filter dimension back
-        feats = feats.transpose(1, 2)
+        feats = self.time_conv(padded_audio)
 
         # Perform post-processing steps
         feats = self.post_proc(feats)
@@ -130,19 +102,3 @@ class LVQT(_LVQT):
         real_weights = self.time_conv.weight
         real_weights = real_weights.squeeze()
         return real_weights
-
-    def get_imag_weights(self):
-        """
-        Obtain the weights of the imaginary part of the transform using Hilbert transform.
-
-        Returns
-        ----------
-        imag_weights : Tensor (F x T)
-          Weights of the imaginary part of the transform,
-          F - number of frequency bins
-          T - number of time steps (samples)
-        """
-
-        real_weights = self.get_real_weights()
-        imag_weights = torch_hilbert(real_weights)
-        return imag_weights
