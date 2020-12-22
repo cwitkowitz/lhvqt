@@ -3,10 +3,12 @@ from .lvqt import _LVQT
 from .utils import *
 
 # Regular imports
+from matplotlib import pyplot as plt
 from librosa.filters import constant_q
 import numpy as np
 import librosa
 import torch
+import os
 
 
 class LVQT(_LVQT):
@@ -75,7 +77,7 @@ class LVQT(_LVQT):
         """
 
         # Pad the audio so the last frame of samples can be used
-        #audio = super().pad_audio(audio)
+        audio = super().pad_audio(audio)
         # We manually do the padding for the convolutional
         # layer to allow for different front/back padding
         padded_audio = torch.nn.functional.pad(audio, self.pd1)
@@ -102,3 +104,35 @@ class LVQT(_LVQT):
         real_weights = self.time_conv.weight
         real_weights = real_weights.squeeze()
         return real_weights
+
+    def get_imag_weights(self):
+        """
+        Return zeros matching size of real weights
+
+        Returns
+        ----------
+        imag_weights : Tensor (F x T)
+          Weights of the imaginary part of the transform (all zeros here),
+          F - number of frequency bins
+          T - number of time steps (samples)
+        """
+
+        real_weights = self.get_real_weights()
+        imag_weights = torch.zeros(real_weights.size())
+        imag_weights = imag_weights.to(real_weights.device)
+        return imag_weights
+
+    def plot_time_weights(self, dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+
+        real_weights = self.get_real_weights().cpu().detach().numpy()
+
+        for k in range(self.n_bins):
+            # TODO - do cpu.detach.numpy in functions?
+            # TODO - add y axis - or just make max/min same for all
+            plt.plot(real_weights[k], color='black', label='Real')
+            plt.axis('off')
+
+            path = os.path.join(dir_path, f'f-{k}.jpg')
+            plt.savefig(path)
+            plt.clf()

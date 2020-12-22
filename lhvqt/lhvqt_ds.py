@@ -3,15 +3,15 @@ from .lvqt_orig import *
 
 # Regular imports
 import librosa
+import torch.nn as nn
 import torch
 import os
 
-# TODO - abstract expected frames and plotting functions?
 
-
-class LHVQT(torch.nn.Module):
+class LHVQT_DS(torch.nn.Module):
     """
-    Harmonic learnable filterbank.
+    Harmonic learnable filterbank where only the top harmonic is learned.
+    The response for lower harmonics is inferred by downsampling the signal.
     """
 
     def __init__(self, fmin=None, harmonics=None, lvqt=None, **kwargs):
@@ -22,8 +22,8 @@ class LHVQT(torch.nn.Module):
         ----------
         fmin : float
           Lowest center frequency in basis
-        harmonics : list of ints
-          Specific harmonics to stack across the harmonic dimension
+        harmonics : list of int
+          Harmonics to compute
         lvqt : type
           Class definition of chosen lower-level LVQT module
         **kwargs : N/A
@@ -31,7 +31,7 @@ class LHVQT(torch.nn.Module):
         """
 
         # Load PyTorch Module properties
-        super(LHVQT, self).__init__()
+        super(LHVQT_DS, self).__init__()
 
         # Default the minimum frequency
         if fmin is None:
@@ -43,6 +43,7 @@ class LHVQT(torch.nn.Module):
         if harmonics is None:
             harmonics = [0.5, 1, 2, 3, 4, 5]
         harmonics.sort()
+        # TODO - how to handle decimal harmonics (e.g. 0.5)?
         self.harmonics = harmonics
 
         # Default the class definition for the lower-level module
@@ -50,17 +51,9 @@ class LHVQT(torch.nn.Module):
             # Original LVQT module
             lvqt = LVQT
 
-        # Create a PyTorch Module to hold LVQTs
-        self.tfs = torch.nn.Module()
-
-        # Loop through harmonics
-        for h in range(len(self.harmonics)):
-            # Name module according to index of harmonic
-            mod_name = 'lvqt%d' % (h + 1)
-            # Calculate the lowest center frequency of this LVQT
-            fmin = float(harmonics[h]) * self.fmin
-            # Create and add the LVQT to the LHVQT module
-            self.tfs.add_module(mod_name, lvqt(fmin=fmin, **kwargs))
+        # Initialize the learnable set of base filters
+        top_fmin = self.fmin * self.harmonics[-1]
+        self.top = lvqt(fmin=top_fmin, **kwargs)
 
     def forward(self, wav):
         """
@@ -84,19 +77,35 @@ class LHVQT(torch.nn.Module):
         """
 
         # Initialize a list to hold each harmonic transform
-        tf_list = []
+        # and add the first harmonic to start
+        top_h = self.top(wav).unsqueeze(0)
+        tf_list = [top_h]
 
-        # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
+        # Obtain target number of frames for remaining harmonics
+        num_frames = self.top.get_expected_frames(wav)
 
-        # Loop through harmonics
-        for h in range(len(self.harmonics)):
-            # Take the transform at each harmonic
-            tf = lvqt_modules[h](wav)
+        # Loop through remaining harmonics in reverse order
+        for i, h in enumerate(self.harmonics[:-1][::-1]):
+            us_rate = self.harmonics[-i-2]
+            ds_rate = self.harmonics[-i-1]
+            # Low-pass filter to remove frequency content above the current harmonic
+            # TODO - do I need this low-pass step?
+            # Upsample the audio by the current harmonic
+            wav = nn.functional.interpolate(wav, scale_factor=us_rate, mode='linear', align_corners=True)
+            # Downsample the audio by the last harmonic
+            wav = wav[..., range(0, wav.shape[-1], ds_rate)]
+
+            # Take the transform again
+            tf = self.top(wav)
+            # Resample the TFR to the same frame amount as the top harmonic
+            tf = nn.functional.interpolate(tf, size=num_frames, mode='linear', align_corners=True)
             # Add a harmonic dimension
             tf = tf.unsqueeze(0)
             # Add the transform to the list
             tf_list.append(tf)
+
+        # Reverse the order of the harmonics in the resulting transform
+        tf_list.reverse()
 
         # Combine the transforms together along harmonic dimension
         feats = torch.cat(tf_list, dim=0)
@@ -122,40 +131,17 @@ class LHVQT(torch.nn.Module):
           Number of frames which will be generated for given audio
         """
 
-        # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
-
-        # Gather expected counts from lower-level modules
-        num_frames = [lvqt_modules[h].get_expected_frames(audio)
-                      for h in range(len(self.harmonics))]
-
-        # Make sure the expected frame count of each module is the same
-        assert len(set(num_frames)) == 1
-        # Collapse the expected frame counts
-        num_frames = num_frames[0]
+        # Number of hops in the audio plus one
+        num_frames = self.top.get_expected_frames(audio)
 
         return num_frames
 
     # TODO - comment
-    def plot_time_weights(self, dir_path):
-        # TODO - abstract this to helper? I use it four times
-        # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
-
-        # Loop through harmonics
-        for h in range(len(self.harmonics)):
-            # TODO - ignore the 1/ if only one harmonic?
-            h_dir_path = os.path.join(dir_path, f'h-{self.harmonics[h]}')
-            # Take the transform at each harmonic
-            lvqt_modules[h].plot_time_weights(h_dir_path)
+    def plot_time_weights(self, dir_path, mag=False):
+        dir_path = os.path.join(dir_path, 'top')
+        self.top.plot_time_weights(dir_path, mag)
 
     # TODO - comment
     def plot_freq_weights(self, dir_path):
-        # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
-
-        # Loop through harmonics
-        for h in range(len(self.harmonics)):
-            h_dir_path = os.path.join(dir_path, f'h-{self.harmonics[h]}')
-            # Take the transform at each harmonic
-            lvqt_modules[h].plot_freq_weights(h_dir_path)
+        dir_path = os.path.join(dir_path, 'top')
+        self.top.plot_freq_weights(dir_path)

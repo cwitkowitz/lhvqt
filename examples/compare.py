@@ -8,8 +8,76 @@ import torch
 from lhvqt.lvqt_orig import *
 
 
-def similarity(A, B):
-    return np.trace(np.dot(A.T, B)) / (np.linalg.norm(A) * np.linalg.norm(B))
+def hvqt_similarity(a, b):
+    """
+    Compute the average cosine similarity measure
+    across the harmonic dimension of two HVQTs.
+    HVQTs must be of the same shape.
+
+    Parameters
+    ----------
+    a : ndarray (H x F x T)
+      First HVQT to compare
+      H - number of harmonics
+      F - number of frequency bins
+      T - number of time steps
+    b : ndarray (H x F x T)
+      Second HVQT to compare
+      H - number of harmonics
+      F - number of frequency bins
+      T - number of time steps
+
+    Returns
+    ----------
+    hvqt_sim : float
+      HVQT similarity measurement
+    """
+
+    assert len(a.shape) == 3
+
+    # Compute the cosine similarity for each harmonic
+    hvqt_sim = [cosine_similarity(a[i], b[i]) for i in range(a.shape[0])]
+    # Average across harmonic dimension
+    hvqt_sim = np.mean(hvqt_sim)
+
+    return hvqt_sim
+
+
+def cosine_similarity(a, b):
+    """
+    Compute the cosine similarity measure for two matrices.
+    Matrices must be of the same shape.
+
+    Parameters
+    ----------
+    a : ndarray (R x C)
+      First matrix to compare
+      R - number of rows
+      C - number of columns
+    b : ndarray (R x C)
+      Second matrix to compare
+      R - number of rows
+      C - number of columns
+
+    Returns
+    ----------
+    cos_sim : float
+      Cosine similarity measurement
+    """
+
+    assert len(a.shape) == 2
+    assert a.shape == b.shape
+
+    # Compute the dot product of matrix a and b as if they were vectors
+    ab_dot = np.trace(np.dot(a.T, b))
+    # Compute the norms of each matrix
+    a_norm = np.linalg.norm(a)
+    b_norm = np.linalg.norm(b)
+
+    # Compute cosine similarity
+    cos_sim = ab_dot / (a_norm * b_norm)
+
+    return cos_sim
 
 
 def main():
@@ -35,7 +103,7 @@ def main():
     fig.tight_layout()
     plt.show()
 
-    print('Similarity: %1.4f' % similarity(V, vqt))
+    print('Similarity: %1.4f' % cosine_similarity(V, vqt))
 
 
 if __name__ == '__main__':

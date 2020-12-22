@@ -97,7 +97,7 @@ class LVQT(_LVQT):
 
         return feats
 
-    def get_comp_weights(self):
+    def get_weights(self):
         """
         Obtain the weights of the transform split by real/imag.
 
@@ -109,9 +109,9 @@ class LVQT(_LVQT):
           T - number of time steps (samples)
         """
 
-        comp_weights = self.time_conv.weight
-        comp_weights = comp_weights.view(self.n_bins, 2, -1)
-        return comp_weights
+        weights = self.time_conv.weight
+        weights = weights.view(self.n_bins, 2, -1)
+        return weights
 
     def get_real_weights(self):
         """
@@ -125,7 +125,7 @@ class LVQT(_LVQT):
           T - number of time steps (samples)
         """
 
-        comp_weights = self.get_comp_weights()
+        comp_weights = self.get_weights()
         real_weights = comp_weights[:, 0]
         return real_weights
 
@@ -141,23 +141,6 @@ class LVQT(_LVQT):
           T - number of time steps (samples)
         """
 
-        comp_weights = self.get_comp_weights()
+        comp_weights = self.get_weights()
         imag_weights = comp_weights[:, 1]
         return imag_weights
-
-    def get_mag_weights(self):
-        """
-        Obtain the magnitude of the complex weights.
-
-        Returns
-        ----------
-        mag_weights : Tensor (F x T)
-          Magnitude of the complex weights,
-          F - number of frequency bins
-          T - number of time steps (samples)
-        """
-
-        real_weights = self.get_real_weights()
-        imag_weights = self.get_imag_weights()
-        mag_weights = torch.sqrt(real_weights ** 2 + imag_weights ** 2)
-        return mag_weights

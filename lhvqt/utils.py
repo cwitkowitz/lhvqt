@@ -82,6 +82,7 @@ def torch_amplitude_to_db(feats, amin=1e-10, top_db=80.0, to_prob=False):
 
 def torch_hilbert(x_real, n_fft=None):
     """
+    TODO - seems to be a tiny bit of energy in negative frequencies
     Obtain imaginary counterpart to a real signal such that there are no negative frequency
     components when represented as a complex signal. This is done by using the Hilbert transform.
     We end up with an analytic signal and return only the imaginary part. Most importantly,
@@ -122,7 +123,9 @@ def torch_hilbert(x_real, n_fft=None):
     Xf = torch.rfft(x_real, signal_ndim=1, onesided=False)
     # Apply the transfer function to the Fourier transform
     Xfh = Xf * h.unsqueeze(-1)
-    # Take the inverse Fourier Transform to obtain the imaginary part
-    x_imag = torch.irfft(Xfh, signal_ndim=1, onesided=False)
+    # Take the inverse Fourier Transform to obtain the analytic signal
+    x_alyt = torch.ifft(Xfh, signal_ndim=1)
+    # Take the imaginary part of the analytic signal to obtain the Hilbert transform
+    x_imag = x_alyt[..., -1]
 
     return x_imag

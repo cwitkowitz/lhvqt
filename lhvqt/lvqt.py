@@ -3,10 +3,13 @@ from .utils import *
 
 # Regular imports
 from librosa.filters import constant_q
+from matplotlib import pyplot as plt
 from abc import abstractmethod
 
+import numpy as np
 import librosa
 import torch
+import os
 
 
 class _LVQT(torch.nn.Module):
@@ -116,7 +119,8 @@ class _LVQT(torch.nn.Module):
         """
 
         # Perform max pooling operation
-        feats = self.mp(feats)
+        # TODO - fix max pooling
+        #feats = self.mp(feats)
 
         if self.to_db:
             # Convert the raw filterbank output to decibels
@@ -177,10 +181,139 @@ class _LVQT(torch.nn.Module):
         """
 
         #if padded:
-            # Pad the audio before calculating expected frames (should add one more)
-        #    audio = self.pad_audio(audio)
+        #    # Pad the audio before calculating expected frames (should add one more)
+        #    audio = self.pad_audio(torch.Tensor(audio))
 
         # Number of hops in the audio plus one
         num_frames = audio.shape[-1] // self.hop_length + 1
 
         return num_frames
+
+    @abstractmethod
+    def get_real_weights(self):
+        """
+        Obtain the weights of the real part of the transform.
+
+        Returns
+        ----------
+        real_weights : Tensor (F x T)
+          Weights of the real part of the transform,
+          F - number of frequency bins
+          T - number of time steps (samples)
+        """
+
+        return NotImplementedError
+
+    @abstractmethod
+    def get_imag_weights(self):
+        """
+        Obtain the weights of the imaginary part of the transform.
+
+        Returns
+        ----------
+        imag_weights : Tensor (F x T)
+          Weights of the imaginary part of the transform,
+          F - number of frequency bins
+          T - number of time steps (samples)
+        """
+
+        return NotImplementedError
+
+    def get_mag_weights(self):
+        """
+        Obtain the magnitude of the complex weights.
+
+        Returns
+        ----------
+        mag_weights : Tensor (F x T)
+          Magnitude of the complex weights,
+          F - number of frequency bins
+          T - number of time steps (samples)
+        """
+
+        real_weights = self.get_real_weights()
+        imag_weights = self.get_imag_weights()
+        mag_weights = torch.sqrt(real_weights ** 2 + imag_weights ** 2)
+        return mag_weights
+
+    def get_comp_weights(self):
+        """
+        Obtain the complex weights.
+
+        Returns
+        ----------
+        comp_weights : ndarray (F x T)
+          Complex-valued weights as NumPy array,
+          F - number of frequency bins
+          T - number of time steps (samples)
+        """
+
+        real_weights = self.get_real_weights().cpu().detach().numpy()
+        imag_weights = self.get_imag_weights().cpu().detach().numpy()
+        comp_weights = real_weights + 1j * imag_weights
+        return comp_weights
+
+    # TODO - comment
+    def plot_time_weights(self, dir_path, mag=False):
+        os.makedirs(dir_path, exist_ok=True)
+
+        mag_weights = self.get_mag_weights().cpu().detach().numpy()
+        real_weights = self.get_real_weights().cpu().detach().numpy()
+        imag_weights = self.get_imag_weights().cpu().detach().numpy()
+
+        for k in range(self.n_bins):
+            # TODO - do cpu.detach.numpy in functions?
+            # TODO - add y axis - or just make max/min same for all
+            if mag:
+                plt.plot(mag_weights[k], color='black', label='Magn')
+            else:
+                plt.plot(real_weights[k], color='black', label='Real', alpha=0.5)
+                plt.plot(imag_weights[k], color='red', label='Imag', alpha=0.5)
+
+            plt.axis('off')
+
+            path = os.path.join(dir_path, f'f-{k}.jpg')
+            plt.savefig(path)
+            plt.clf()
+
+    # TODO - comment
+    def plot_freq_weights(self, dir_path, n_fft=2048*16):
+        os.makedirs(dir_path, exist_ok=True)
+
+        comp_weights = self.get_comp_weights()
+
+        nyquist = self.fs // 2
+
+        # TODO - CQT basis instead?
+        freqs = np.fft.fftfreq(n_fft, (1 / self.fs))
+
+        # Take the magnitude of the FFT of the complex weights (freq response)
+        freq_resp = np.abs(np.fft.fft(comp_weights, n=n_fft))
+
+        freq_resp = librosa.amplitude_to_db(freq_resp, ref=np.max)
+        freq_resp = freq_resp.T
+
+        # Normalize frequency response
+        norm_freq_resp = (freq_resp + 80) / 80
+        centroids = np.dot(freqs[:n_fft // 2], norm_freq_resp[:n_fft // 2])
+        centroids = centroids / np.sum(norm_freq_resp[:n_fft // 2:], axis=0)
+
+        # Sort by ascending spectral centroid # TODO - make optional
+        freq_resp = freq_resp[:, np.argsort(-centroids)]
+
+        #freqs = np.roll(np.fft.fftfreq(n_fft, (1 / self.fs)), n_fft // 2)
+        #freq_resp = np.roll(freq_resp, n_fft // 2, axis=0)
+        freq_resp = np.concatenate((np.flip(freq_resp[:n_fft // 2]), np.flip(freq_resp[n_fft // 2:])))
+
+        # TODO - why no energy in negative freqs?
+        plt.imshow(freq_resp, extent=[0, self.n_bins, -nyquist, nyquist], aspect='auto')
+        plt.yticks(np.linspace(nyquist, -nyquist, 9))
+        plt.xticks(np.linspace(0, self.n_bins, ((self.n_bins - 1) // 10) + 1).astype('uint16'))
+        plt.ylim([-nyquist, nyquist])
+        plt.title('Magnitude Response')
+        plt.colorbar(format='%+2.0f dB')
+        plt.grid(True, color='black', linestyle='--', axis='x')
+
+        path = os.path.join(dir_path, 'freq.jpg')
+        plt.savefig(path)
+        plt.clf()
