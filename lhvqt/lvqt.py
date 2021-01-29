@@ -76,7 +76,8 @@ class _LVQT(torch.nn.Module):
                                               n_bins=n_bins,
                                               bins_per_octave=bins_per_octave,
                                               gamma=gamma,
-                                              pad_fft=False)
+                                              pad_fft=False,
+                                              norm=None)
 
         # Initialize max pooling to take 'max_p' responses per frame and aggregate with max operation
         self.mp = torch.nn.MaxPool1d(self.max_p)
@@ -305,14 +306,17 @@ class _LVQT(torch.nn.Module):
         #freq_resp = np.roll(freq_resp, n_fft // 2, axis=0)
         freq_resp = np.concatenate((np.flip(freq_resp[:n_fft // 2]), np.flip(freq_resp[n_fft // 2:])))
 
-        # TODO - why no energy in negative freqs?
         plt.imshow(freq_resp, extent=[0, self.n_bins, -nyquist, nyquist], aspect='auto')
-        plt.yticks(np.linspace(nyquist, -nyquist, 9))
-        plt.xticks(np.linspace(0, self.n_bins, ((self.n_bins - 1) // 10) + 1).astype('uint16'))
-        plt.ylim([-nyquist, nyquist])
-        plt.title('Magnitude Response')
+        #plt.yticks(np.linspace(nyquist, -nyquist, 9))
+        plt.yticks(np.linspace(nyquist, 0, 2))
+        #plt.xticks(np.linspace(0, self.n_bins, ((self.n_bins - 1) // 10) + 1).astype('uint16'))
+        # TODO - should only remove negative freq for hilbert
+        plt.ylim([0, nyquist])
+        plt.title('Frequency Response')
+        plt.ylabel('Frequency')
+        plt.xlabel('Filter Index')
         plt.colorbar(format='%+2.0f dB')
-        plt.grid(True, color='black', linestyle='--', axis='x')
+        #plt.grid(True, color='black', linestyle='--', axis='x')
 
         path = os.path.join(dir_path, 'freq.jpg')
         plt.savefig(path)
