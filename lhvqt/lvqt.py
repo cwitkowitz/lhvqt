@@ -2,8 +2,10 @@
 from .utils import *
 
 # Regular imports
+from mpl_toolkits.axisartist.axislines import SubplotZero
 from librosa.filters import constant_q
 from matplotlib import pyplot as plt
+from matplotlib import rcParams
 from abc import abstractmethod
 
 import numpy as np
@@ -51,24 +53,29 @@ class _LVQT(torch.nn.Module):
         # Load PyTorch Module properties
         super(_LVQT, self).__init__()
 
+        # Make parameters accessible
+        self.fs = fs
+        self.hop_length = hop_length
+        self.n_bins = n_bins
+        self.bins_per_octave = bins_per_octave
+        self.random = random
+        self.max_p = max_p
+        self.to_db = to_db
+        self.db_to_prob = db_to_prob
+        self.batch_norm = batch_norm
+
         # Default the minimum frequency
         if fmin is None:
             # Note C1
             fmin = librosa.note_to_hz('C1')
         self.fmin = fmin
 
-        # Make parameters accessible
-        self.fs = fs
-        self.hop_length = hop_length
-        self.fmin = fmin
-        self.n_bins = n_bins
-        self.bins_per_octave = bins_per_octave
+        # Default gamma using the procedure defined in
+        # librosa.filters.constant_q.vqt documentation
+        if gamma is None:
+            alpha = 2.0 ** (1.0 / bins_per_octave) - 1
+            gamma = 24.7 * alpha / 0.108
         self.gamma = gamma
-        self.random = random
-        self.max_p = max_p
-        self.to_db = to_db
-        self.db_to_prob = db_to_prob
-        self.batch_norm = batch_norm
 
         # Get complex bases and their respective lengths for a variable-Q transform
         self.basis, self.lengths = constant_q(sr=fs,
@@ -182,6 +189,7 @@ class _LVQT(torch.nn.Module):
         """
 
         #if padded:
+        # TODO - think this is related to max pooling breaking
         #    # Pad the audio before calculating expected frames (should add one more)
         #    audio = self.pad_audio(torch.Tensor(audio))
 
@@ -234,7 +242,9 @@ class _LVQT(torch.nn.Module):
 
         real_weights = self.get_real_weights()
         imag_weights = self.get_imag_weights()
+
         mag_weights = torch.sqrt(real_weights ** 2 + imag_weights ** 2)
+
         return mag_weights
 
     def get_comp_weights(self):
@@ -249,75 +259,325 @@ class _LVQT(torch.nn.Module):
           T - number of time steps (samples)
         """
 
-        real_weights = self.get_real_weights().cpu().detach().numpy()
-        imag_weights = self.get_imag_weights().cpu().detach().numpy()
+        real_weights = tensor_to_array(self.get_real_weights())
+        imag_weights = tensor_to_array(self.get_imag_weights())
+
         comp_weights = real_weights + 1j * imag_weights
+
         return comp_weights
 
-    # TODO - comment
-    def plot_time_weights(self, dir_path, mag=False):
-        os.makedirs(dir_path, exist_ok=True)
+    def visualize(self, save_dir, **kwargs):
+        time_dir = os.path.join(save_dir, 'time')
 
-        mag_weights = self.get_mag_weights().cpu().detach().numpy()
-        real_weights = self.get_real_weights().cpu().detach().numpy()
-        imag_weights = self.get_imag_weights().cpu().detach().numpy()
+        time_kwargs = filter_kwargs(['idcs',
+                                     'fix_scale',
+                                     'include_axis'], **kwargs)
 
-        for k in range(self.n_bins):
-            # TODO - do cpu.detach.numpy in functions?
-            # TODO - add y axis - or just make max/min same for all
-            if mag:
-                plt.plot(mag_weights[k], color='black', label='Magn')
-            else:
-                plt.plot(real_weights[k], color='black', label='Real', alpha=0.5)
-                plt.plot(imag_weights[k], color='red', label='Imag', alpha=0.5)
+        self.visualize_time_domain_complex(time_dir, **time_kwargs)
 
-            plt.axis('off')
+        fft_dir = os.path.join(save_dir, 'fft')
 
-            path = os.path.join(dir_path, f'f-{k}.jpg')
-            plt.savefig(path)
-            plt.clf()
+        fft_1d_kwargs = filter_kwargs(['idcs',
+                                       'n_fft',
+                                       'include_axis',
+                                       'scale_freqs',
+                                       'decibels',
+                                       'include_negative',
+                                       'separate'], **kwargs)
 
-    # TODO - comment
-    def plot_freq_weights(self, dir_path, n_fft=2048*16):
-        os.makedirs(dir_path, exist_ok=True)
+        self.visualize_freq_domain_fft_1d(fft_dir, **fft_1d_kwargs)
 
+        fft_2d_path = os.path.join(fft_dir, f'all_2d.jpg')
+        fft_2d_kwargs = filter_kwargs(['idcs',
+                                       'n_fft',
+                                       'sort_by_centroid'
+                                       'include_axis',
+                                       'scale_freqs',
+                                       'include_negative'], **kwargs)
+        self.visualize_freq_domain_fft_2d(fft_2d_path, **fft_2d_kwargs)
+
+    def visualize_time_domain_complex(self, save_dir, idcs=None, fix_scale=False, include_axis=False):
+        """
+        Plot the time domain filters of the filterbank.
+
+        Parameters
+        ----------
+        save_dir : string
+          Directory under which to save images for each plot
+        idcs : list, ndarray or None (optional)
+          Specific filter indices to plot rather than plotting all of them
+        fix_scale : bool
+          Whether to place all filters on the same amplitude scale
+        include_axis : bool
+          Whether to add X and Y axis and a grid along the Y axis
+        """
+
+        # Make sure the provided save directory exists
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Obtain the real and imaginary filterbank weights
+        real_weights = tensor_to_array(self.get_real_weights())
+        imag_weights = tensor_to_array(self.get_imag_weights())
+
+        # Determine the maximum weight magnitude for scaling
+        max_weight = max(np.max(np.abs(real_weights)), np.max(np.abs(imag_weights)))
+
+        # Determine the amount of weights in each filter
+        num_weights = real_weights.shape[-1]
+
+        # Create ascending indices to loop through
+        filter_idcs = np.arange(self.n_bins)
+
+        if idcs is not None:
+            # Reduce the indices to those specified by user
+            filter_idcs = np.intersect1d(filter_idcs, idcs)
+
+        # Create a figure and axis for plotting
+        fig = plt.figure()
+        ax = SubplotZero(fig, 111)
+        fig.add_subplot(ax)
+
+        if fix_scale:
+            # Make the y boundaries of each filter 10% of the maximum weight magnitude
+            ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
+
+        # Remove right, top, and bottom border
+        ax.axis['right'].set_visible(False)
+        ax.axis['top'].set_visible(False)
+        ax.axis['bottom'].set_visible(False)
+
+        if include_axis:
+            # Add X axes at origin
+            ax.axis['xzero'].set_visible(True)
+            # Only add X tick to show number of weights in the plot
+            ax.set_xticks([num_weights])
+            # Remove space padding along X axis
+            ax.set_xlim([0, num_weights])
+            # Add a grid to the axis
+            ax.grid(axis='y')
+        else:
+            # Remove the left border
+            ax.axis['left'].set_visible(False)
+
+        # Minimize free space
+        fig.tight_layout()
+
+        # Loop through the filter indices
+        for k in filter_idcs:
+            # Plot the real and imaginary weights separately
+            ax.plot(real_weights[k], color='black', label='Real', alpha=0.75)
+            ax.plot(imag_weights[k], color='purple', label='Imag', alpha=0.75)
+
+            # Construct a path to save an image of the plot
+            save_path = os.path.join(save_dir, f'f_{k}.jpg')
+
+            # Save the figure
+            fig.savefig(save_path)
+
+            # Clear the plot in preparation for the next filter
+            ax.lines[0].remove()
+            ax.lines[0].remove()
+
+    def visualize_freq_domain_fft_1d(self, save_dir, idcs=None, n_fft=None, include_axis=False,
+                                     scale_freqs=False, decibels=False, include_negative=False, separate=True):
+        """
+        Plot the FFT response of the filterbank and display in 1D fashion.
+
+        Parameters
+        ----------
+        save_dir : string
+          Directory under which to save images for each plot
+        idcs : list, ndarray or None (optional)
+          Specific filter indices to plot rather than plotting all of them
+        n_fft : int or None (optional)
+          See np.fft.fft documentation...
+        include_axis : bool
+          Whether to add X and Y axis and a grid along the Y axis
+        scale_freqs : bool
+          Whether to leave frequencies as they are or scale to be between [-1, 1]
+        decibels : bool
+          Whether to convert to dB or leave as amplitude
+        include_negative : bool
+          Whether to include negative frequencies in the plot
+        separate : bool
+          Whether to plot the response of each filter separately or all in one plot
+        """
+
+        # Make sure the provided save directory exists
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Obtain the complex filterbank weights
         comp_weights = self.get_comp_weights()
 
-        nyquist = self.fs // 2
+        # Determine the Nyquist
+        nyquist = self.fs / 2
 
-        # TODO - CQT basis instead?
-        freqs = np.fft.fftfreq(n_fft, (1 / self.fs))
+        # Create ascending indices to loop through
+        filter_idcs = np.arange(self.n_bins)
 
-        # Take the magnitude of the FFT of the complex weights (freq response)
-        freq_resp = np.abs(np.fft.fft(comp_weights, n=n_fft))
+        if idcs is not None:
+            # Reduce the indices to those specified by user
+            filter_idcs = np.intersect1d(filter_idcs, idcs)
 
-        freq_resp = librosa.amplitude_to_db(freq_resp, ref=np.max)
-        freq_resp = freq_resp.T
+        # Scale the X axis to be twice the length of Y axis if negative frequencies are included
+        figsize = rcParams['figure.figsize']
+        figsize = [(2 ** include_negative) * figsize[0], figsize[1]]
 
-        # Normalize frequency response
-        norm_freq_resp = (freq_resp + 80) / 80
-        centroids = np.dot(freqs[:n_fft // 2], norm_freq_resp[:n_fft // 2])
-        centroids = centroids / np.sum(norm_freq_resp[:n_fft // 2:], axis=0)
+        # Create a figure and axis for plotting
+        fig = plt.figure(figsize=figsize)
+        ax = SubplotZero(fig, 111)
+        fig.add_subplot(ax)
 
-        # Sort by ascending spectral centroid # TODO - make optional
-        freq_resp = freq_resp[:, np.argsort(-centroids)]
+        if include_negative:
+            # Keep negative frequencies and remove space padding along X axis
+            ax.set_xlim(-nyquist ** (not scale_freqs), nyquist ** (not scale_freqs))
+        else:
+            # Remove negative frequencies and remove space padding along X axis
+            ax.set_xlim(0, nyquist ** (not scale_freqs))
 
-        #freqs = np.roll(np.fft.fftfreq(n_fft, (1 / self.fs)), n_fft // 2)
-        #freq_resp = np.roll(freq_resp, n_fft // 2, axis=0)
-        freq_resp = np.concatenate((np.flip(freq_resp[:n_fft // 2]), np.flip(freq_resp[n_fft // 2:])))
+        # Remove right and top border
+        ax.axis['right'].set_visible(False)
+        ax.axis['top'].set_visible(False)
 
-        plt.imshow(freq_resp, extent=[0, self.n_bins, -nyquist, nyquist], aspect='auto')
-        #plt.yticks(np.linspace(nyquist, -nyquist, 9))
-        plt.yticks(np.linspace(nyquist, 0, 2))
-        #plt.xticks(np.linspace(0, self.n_bins, ((self.n_bins - 1) // 10) + 1).astype('uint16'))
-        # TODO - should only remove negative freq for hilbert
-        plt.ylim([0, nyquist])
-        plt.title('Frequency Response')
-        plt.ylabel('Frequency')
-        plt.xlabel('Filter Index')
-        plt.colorbar(format='%+2.0f dB')
-        #plt.grid(True, color='black', linestyle='--', axis='x')
+        if include_axis:
+            # Add an appropriate label to the Y axis
+            ax.set_ylabel('dB') if decibels else ax.set_ylabel('A')
+            # Add a grid to the axis
+            ax.grid(axis='y')
+        else:
+            # Remove the left and bottom border
+            ax.axis['left'].set_visible(False)
+            ax.axis['bottom'].set_visible(False)
 
-        path = os.path.join(dir_path, 'freq.jpg')
-        plt.savefig(path)
-        plt.clf()
+        # Minimize free space
+        fig.tight_layout()
+
+        # Calculate the FFT response for all filters at once
+        freqs, resp = fft_response(comp_weights, self.fs, n_fft, decibels)
+
+        if scale_freqs:
+            # Scale the frequencies to be within [-1, 1]
+            freqs = freqs / nyquist
+
+        # Loop through the filter indices
+        for k in filter_idcs:
+            # Plot the FFT response
+            ax.plot(freqs, resp[k], color='purple', label='FFT Response', alpha=0.75)
+
+            if separate:
+                # Construct a path to save an image of the plot
+                save_path = os.path.join(save_dir, f'f_{k}.jpg')
+                # Save the figure
+                fig.savefig(save_path)
+                # Clear the plot in preparation for the next filter
+                ax.lines[0].remove()
+
+        if not separate:
+            # Construct a path to save an image of the plot
+            save_path = os.path.join(save_dir, f'all_1d.jpg')
+            # Save the figure, now that it is complete
+            fig.savefig(save_path)
+
+    def visualize_freq_domain_fft_2d(self, save_path, idcs=None, n_fft=None, sort_by_centroid=False,
+                                     include_axis=False, scale_freqs=False, include_negative=False):
+        """
+        Plot the FFT response (dB) of the filterbank and display in 2D fashion.
+
+        Parameters
+        ----------
+        save_path : string
+          Path to use when saving an image of the plot
+        idcs : list, ndarray or None (optional)
+          Specific filter indices to plot rather than plotting all of them
+        n_fft : int or None (optional)
+          See np.fft.fft documentation...
+        sort_by_centroid : bool
+          Whether to order the filters by ascending spectral centroid
+        include_axis : bool
+          Whether to add X and Y axis and a grid along the Y axis
+        scale_freqs : bool
+          Whether to leave frequencies as they are or scale to be between [-1, 1]
+        include_negative : bool
+          Whether to include negative frequencies in the plot
+        """
+
+        # Make sure the provided save directory exists
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        # Obtain the complex filterbank weights
+        comp_weights = self.get_comp_weights()
+
+        # Calculate the FFT response for all filters at once
+        freqs, resp = fft_response(comp_weights, self.fs, n_fft, True)
+
+        # Determine the Nyquist
+        nyquist = self.fs / 2
+
+        # Create ascending indices to loop through
+        filter_idcs = np.arange(self.n_bins)
+
+        if idcs is not None:
+            # Reduce the indices to those specified by user
+            filter_idcs = np.intersect1d(filter_idcs, idcs)
+
+        # Keep only filters matching specified indices
+        resp = resp[filter_idcs]
+
+        # Determine the number of bins in the response
+        num_bins = resp.shape[-1]
+
+        if sort_by_centroid:
+            # Get the normalized response in case the filters are not normalized
+            norm_resp = resp / np.expand_dims(np.sum(resp, axis=-1), axis=-1)
+
+            # Compute the spectral centroid of each filter
+            centroids = np.dot(norm_resp[..., num_bins // 2:], freqs[num_bins // 2:])
+            centroids = centroids / np.sum(norm_resp[..., num_bins // 2:], axis=-1)
+
+            # Sort the filters by spectral centroid of positive frequency response
+            resp = resp[np.argsort(centroids)]
+
+        # Line up the response properly for the image
+        resp = np.transpose(np.flip(resp, axis=-1))
+
+        # Scale the X axis to be twice the length of Y axis. If negative
+        # frequencies are included, the Y axis length will be scaled by two as well
+        figsize = rcParams['figure.figsize']
+        figsize = [2 * figsize[0], (2 ** include_negative) * figsize[1]]
+
+        # Create a figure and axis for plotting
+        fig = plt.figure(figsize=figsize)
+        ax = SubplotZero(fig, 111)
+        fig.add_subplot(ax)
+
+        # Determine the frequency boundaries we are operating with
+        y_bounds = [-nyquist ** (not scale_freqs), nyquist ** (not scale_freqs)]
+
+        # Plot the response for all filters as an image
+        img = ax.imshow(resp, extent=[0, len(filter_idcs), y_bounds[0], y_bounds[1]], aspect='auto', cmap='Purples')
+
+        # Remove right and top border
+        ax.axis['right'].set_visible(False)
+        ax.axis['top'].set_visible(False)
+
+        if include_axis:
+            # Only add X tick to show number of filters in plot
+            ax.set_xticks([len(filter_idcs)])
+            # Add a grid to the axis
+            ax.grid(axis='y')
+            # Add a colorbar to the figure
+            fig.colorbar(img, format='%+2.0f dB')
+        else:
+            # Remove the left and bottom border
+            ax.axis['left'].set_visible(False)
+            ax.axis['bottom'].set_visible(False)
+
+        if not include_negative:
+            # Trim response for negative frequencies
+            ax.set_ylim([0, y_bounds[1]])
+
+        # Minimize free space
+        fig.tight_layout()
+
+        # Save the figure
+        fig.savefig(save_path)

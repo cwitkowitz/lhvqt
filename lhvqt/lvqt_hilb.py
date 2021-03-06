@@ -40,12 +40,11 @@ class LVQT(_LVQT):
         self.pd1 = (pd1, self.basis.shape[1] - pd1)
 
         # Initialize the 1D convolutional filterbank
-        self.time_conv = torch.nn.Conv1d(in_channels=nf_in,
-                                         out_channels=nf_out,
-                                         kernel_size=ks1,
-                                         stride=self.sd1,
-                                         padding=0,
-                                         bias=False)
+        self.time_conv = Conv1d(in_channels=nf_in,
+                                out_channels=nf_out,
+                                kernel_size=ks1,
+                                stride=self.sd1,
+                                dropout=True)
 
         if not self.random:
             # Get the real weights from the complex valued bases

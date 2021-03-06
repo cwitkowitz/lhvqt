@@ -1,5 +1,6 @@
 # My imports
 from .lvqt import _LVQT
+from .utils import *
 
 # Regular imports
 import numpy as np
@@ -30,19 +31,18 @@ class LVQT(_LVQT):
         # Kernel must be as long as longest basis
         ks1 = self.basis.shape[1]
         # Stride the amount of samples necessary to take 'max_p' responses per frame
-        sd1 = self.hop_length // self.max_p
+        self.sd1 = self.hop_length // self.max_p
         # Padding to start centered around the first real sample,
         # and end centered around the last real sample
         pd1 = self.basis.shape[1] // 2
         self.pd1 = (pd1, self.basis.shape[1] - pd1)
 
         # Initialize the 1D convolutional filterbank
-        self.time_conv = torch.nn.Conv1d(in_channels=nf_in,
-                                         out_channels=nf_out,
-                                         kernel_size=ks1,
-                                         stride=sd1,
-                                         padding=0,
-                                         bias=False)
+        self.time_conv = Conv1d(in_channels=nf_in,
+                                out_channels=nf_out,
+                                kernel_size=ks1,
+                                stride=self.sd1,
+                                dropout=False)
 
         if not self.random:
             # Split the complex valued bases into real and imaginary weights

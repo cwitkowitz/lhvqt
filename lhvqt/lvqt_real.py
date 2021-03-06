@@ -41,12 +41,11 @@ class LVQT(_LVQT):
         self.pd1 = (pd1, self.basis.shape[1] - pd1)
 
         # Initialize the 1D convolutional filterbank
-        self.time_conv = torch.nn.Conv1d(in_channels=nf_in,
-                                         out_channels=nf_out,
-                                         kernel_size=ks1,
-                                         stride=self.sd1,
-                                         padding=0,
-                                         bias=False)
+        self.time_conv = Conv1d(in_channels=nf_in,
+                                out_channels=nf_out,
+                                kernel_size=ks1,
+                                stride=self.sd1,
+                                dropout=False)
 
         if not self.random:
             # Get the real weights from the complex valued bases
@@ -121,18 +120,3 @@ class LVQT(_LVQT):
         imag_weights = torch.zeros(real_weights.size())
         imag_weights = imag_weights.to(real_weights.device)
         return imag_weights
-
-    def plot_time_weights(self, dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-
-        real_weights = self.get_real_weights().cpu().detach().numpy()
-
-        for k in range(self.n_bins):
-            # TODO - do cpu.detach.numpy in functions?
-            # TODO - add y axis - or just make max/min same for all
-            plt.plot(real_weights[k], color='black', label='Real')
-            plt.axis('off')
-
-            path = os.path.join(dir_path, f'f-{k}.jpg')
-            plt.savefig(path)
-            plt.clf()

@@ -1,4 +1,108 @@
+from torch.autograd import Variable
+from torch.nn.parameter import Parameter
+
+import torch.nn.functional as F
+import torch.nn as nn
+import numpy as np
+import librosa
 import torch
+import math
+
+EPSILON = torch.finfo(torch.float32).eps
+
+
+def Conv1d(in_channels, out_channels, kernel_size, stride, dropout=False):
+        # TODO - this doesn't feel neat. Seems more appropriate as a module
+        module = None
+
+        if dropout:
+            module = VariationalDropoutConv1d(in_channels=in_channels,
+                                              out_channels=out_channels,
+                                              kernel_size=kernel_size,
+                                              stride=stride)
+        else:
+            module = torch.nn.Conv1d(in_channels=in_channels,
+                                     out_channels=out_channels,
+                                     kernel_size=kernel_size,
+                                     stride=stride,
+                                     padding=0,
+                                     bias=False)
+
+        return module
+
+
+class VariationalDropoutConv1d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, log_sigma2=-10, threshold=math.inf):
+        """
+        TODO
+        :param input_size: An int of input size
+        :param log_sigma2: Initial value of log sigma ^ 2.
+               It is crusial for training since it determines initial value of alpha
+        :param threshold: Value for thresholding of validation. If log_alpha > threshold, then weight is zeroed
+        :param out_size: An int of output size
+        """
+        super(VariationalDropoutConv1d, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+        self.weight = Parameter(torch.FloatTensor(out_channels, in_channels, kernel_size))
+
+        self.log_sigma2 = Parameter(torch.FloatTensor(self.weight.size()).fill_(log_sigma2))
+        self.log_alpha = None
+
+        self.reset_parameters()
+
+        self.k = [0.63576, 1.87320, 1.48695]
+
+        self.threshold = threshold
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.out_channels)
+
+        self.weight.data.uniform_(-stdv, stdv)
+
+    @staticmethod
+    def clip(input, to=math.inf):
+        input = input.masked_fill(input < -to, -to)
+        input = input.masked_fill(input > to, to)
+
+        return input
+
+    def forward(self, input):
+        """
+        TODO
+        :param input: An float tensor with shape of [batch_size, input_size]
+        :return: An float tensor with shape of [batch_size, out_size] and negative layer-kld estimation
+        """
+
+        log_alpha = self.clip(self.log_sigma2 - torch.log(self.weight ** 2 + EPSILON))
+        self.log_alpha = log_alpha
+
+        if not self.training:
+            mask = log_alpha > self.threshold
+            return F.conv1d(input, weight=self.weight.masked_fill(mask, 0), stride=self.stride)
+
+        mu = F.conv1d(input, weight=self.weight, stride=self.stride)
+        std = torch.sqrt(F.conv1d(input ** 2, weight=self.log_sigma2.exp(), stride=self.stride) + EPSILON)
+
+        eps = Variable(torch.randn(*mu.size())).to(input.device)
+
+        #print(f'mu: [{torch.min(mu)}, {torch.max(mu)}]\nstd: [{torch.min(std)}, {torch.max(std)}]\neps: [{torch.min(eps)}, {torch.max(eps)}]')
+        return std * eps + mu
+
+    def max_alpha(self):
+        log_alpha = self.log_sigma2 - self.weight ** 2
+        return torch.max(log_alpha.exp())
+
+    def kld(self, log_alpha):
+
+        first_term = self.k[0] * F.sigmoid(self.k[1] + self.k[2] * log_alpha)
+        second_term = 0.5 * torch.log(1 + torch.exp(-log_alpha))
+
+        return -(first_term - second_term - self.k[0]).sum() / (self.in_channels * self.out_channels * self.kernel_size)
 
 
 def torch_amplitude_to_db(feats, amin=1e-10, top_db=80.0, to_prob=False):
@@ -129,3 +233,129 @@ def torch_hilbert(x_real, n_fft=None):
     x_imag = x_alyt[..., -1]
 
     return x_imag
+
+
+def fft_response(signal, sample_rate, n_fft=None, decibels=False):
+    """
+    Obtain a signal's FFT response in a plot-friendly format.
+
+    Parameters
+    ----------
+    signal : ndarray
+      Signal to transform
+    sample_rate : int
+      Number of samples per second
+    n_fft : int or None (optional)
+      See np.fft.fft documentation...
+    decibels : bool
+      Whether to convert to dB or leave as amplitude
+
+    Returns
+    ----------
+    frequencies : ndarray
+      Ordered frequencies corresponding to each response
+    response : ndarray
+      Magnitude response of signal for each basis
+    """
+
+    # Take the FFT and calculate the magnitude of the response
+    response = np.abs(np.fft.fft(signal, n=n_fft))
+
+    if decibels:
+        # Convert the frequency resposne from amplitude to decibels
+        response = librosa.amplitude_to_db(response, ref=np.max)
+
+    # Determine the number of bins in the response
+    num_bins = response.shape[-1]
+
+    # Get the frequencies corresponding to the FFT indices
+    frequencies = np.fft.fftfreq(num_bins, (1 / sample_rate))
+
+    # Re-order the FFT and frequencies so they go from most negative to most positive
+    response = np.roll(response, response.shape[-1] // 2, axis=-1)
+    frequencies = np.roll(frequencies, frequencies.shape[-1] // 2)
+
+    return frequencies, response
+
+
+def filter_kwargs(keywords, **kwargs):
+    """
+    Filter provided keyword arguments and remove all but
+    those matching a provided list of relevant keywords.
+
+    Parameters
+    ----------
+    keywords : list of string
+      Keywords to search for within the provided keyword arguments
+    kwargs : dict
+      Dictionary of provided keywords
+
+    Returns
+    ----------
+    filtered_kwargs : dict
+      Keyword arguments matching provided keyword list entries
+    """
+
+    # Create an empty dictionary for keyword matches
+    filtered_kwargs = dict()
+
+    # Loop through relevant keywords
+    for key in keywords:
+        # Check if there is a match
+        if key in kwargs:
+            # Add the keyword argument to the matches dictionary
+            filtered_kwargs[key] = kwargs[key]
+
+    return filtered_kwargs
+
+
+def tensor_to_array(tensor):
+    """
+    Simple helper function to convert a PyTorch tensor
+    into a NumPy array in order to keep code readable.
+
+    Parameters
+    ----------
+    tensor : PyTorch tensor
+      Tensor to convert to array
+
+    Returns
+    ----------
+    array : NumPy ndarray
+      Converted array
+    """
+
+    # Change device to CPU,
+    # detach from gradient graph,
+    # and convert to NumPy array
+    array = tensor.cpu().detach().numpy()
+
+    return array
+
+
+def array_to_tensor(array, device=None):
+    """
+    Simple helper function to convert a NumPy array
+    into a PyTorch tensor in order to keep code readable.
+
+    Parameters
+    ----------
+    array : NumPy ndarray
+      Array to convert to tensor
+    device : string, or None (optional)
+      Add tensor to this device, if specified
+
+    Returns
+    ----------
+    tensor : PyTorch tensor
+      Converted tensor
+    """
+
+    # Convert to PyTorch tensor
+    tensor = torch.from_numpy(array)
+
+    # Add tensor to device, if specified
+    if device is not None:
+        tensor = tensor.to(device)
+
+    return tensor

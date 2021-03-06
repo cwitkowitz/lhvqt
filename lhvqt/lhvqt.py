@@ -62,6 +62,12 @@ class LHVQT(torch.nn.Module):
             # Create and add the LVQT to the LHVQT module
             self.tfs.add_module(mod_name, lvqt(fmin=fmin, **kwargs))
 
+    def get_modules(self):
+        # Obtain a pointer to the lower-level modules
+        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
+
+        return lvqt_modules
+
     def forward(self, wav):
         """
         Perform the main processing steps for the harmonic filterbank.
@@ -87,7 +93,7 @@ class LHVQT(torch.nn.Module):
         tf_list = []
 
         # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
+        lvqt_modules = self.get_modules()
 
         # Loop through harmonics
         for h in range(len(self.harmonics)):
@@ -123,7 +129,7 @@ class LHVQT(torch.nn.Module):
         """
 
         # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
+        lvqt_modules = self.get_modules()
 
         # Gather expected counts from lower-level modules
         num_frames = [lvqt_modules[h].get_expected_frames(audio)
@@ -136,26 +142,13 @@ class LHVQT(torch.nn.Module):
 
         return num_frames
 
-    # TODO - comment
-    def plot_time_weights(self, dir_path):
-        # TODO - abstract this to helper? I use it four times
+    def visualize(self, save_dir, **kwargs):
         # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
+        lvqt_modules = self.get_modules()
 
         # Loop through harmonics
         for h in range(len(self.harmonics)):
-            # TODO - ignore the 1/ if only one harmonic?
-            h_dir_path = os.path.join(dir_path, f'h-{self.harmonics[h]}')
-            # Take the transform at each harmonic
-            lvqt_modules[h].plot_time_weights(h_dir_path)
-
-    # TODO - comment
-    def plot_freq_weights(self, dir_path):
-        # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
-
-        # Loop through harmonics
-        for h in range(len(self.harmonics)):
-            h_dir_path = os.path.join(dir_path, f'h-{self.harmonics[h]}')
-            # Take the transform at each harmonic
-            lvqt_modules[h].plot_freq_weights(h_dir_path)
+            # Construct a path to the directory for the harmonic
+            h_dir = os.path.join(save_dir, f'h_{self.harmonics[h]}') if len(self.harmonics) > 1 else save_dir
+            # Visualize the harmonic
+            lvqt_modules[h].visualize(h_dir, **kwargs)
