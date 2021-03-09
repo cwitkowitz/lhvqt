@@ -35,10 +35,12 @@ class LHVQT_COMB(LHVQT):
         super(LHVQT_COMB, self).__init__(fmin=fmin, harmonics=harmonics, lvqt=lvqt, **kwargs)
 
         # Obtain a pointer to the lower-level modules
-        lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
+        lvqt_modules = self.get_modules()
 
-        self.tfs = lvqt_modules[0]
-        weights = self.tfs.time_conv.weight
+        # TODO - overwrite self.tfs
+
+        self.comb = lvqt_modules[0]
+        weights = self.comb.time_conv.weight
 
         for h in range(1, len(self.harmonics)):
             basis = lvqt_modules[h].time_conv.weight
@@ -49,7 +51,7 @@ class LHVQT_COMB(LHVQT):
             basis = nn.functional.pad(basis, pad=pad)
             weights = weights + basis
 
-        self.tfs.time_conv.weight = torch.nn.Parameter(weights)
+        self.comb.time_conv.weight = torch.nn.Parameter(weights)
 
     def forward(self, wav):
         """
@@ -72,7 +74,7 @@ class LHVQT_COMB(LHVQT):
           T - number of time steps (frames)
         """
 
-        feats = self.tfs(wav).unsqueeze(0)
+        feats = self.comb(wav).unsqueeze(0)
         # Switch harmonic and batch dimension
         feats = feats.transpose(1, 0)
 
@@ -96,14 +98,10 @@ class LHVQT_COMB(LHVQT):
         """
 
         # Number of hops in the audio plus one
-        num_frames = self.tfs.get_expected_frames(audio)
+        num_frames = self.comb.get_expected_frames(audio)
 
         return num_frames
 
-    # TODO - comment
-    def plot_time_weights(self, dir_path, mag=False):
-        self.tfs.plot_time_weights(dir_path, mag)
-
-    # TODO - comment
-    def plot_freq_weights(self, dir_path):
-        self.tfs.plot_freq_weights(dir_path)
+    def visualize(self, save_dir, **kwargs):
+        # Visualize the harmonic comb
+        self.comb.visualize(save_dir, **kwargs)

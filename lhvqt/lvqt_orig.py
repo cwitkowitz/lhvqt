@@ -9,8 +9,9 @@ import torch
 
 class LVQT(_LVQT):
     """
-    Implements a slight adaptation/modernization of the original module
-    presented in my Master's Thesis (https://scholarworks.rit.edu/theses/10143/).
+    Implements a slight adaptation/modernization of the original module presented in my Master's
+    Thesis (https://scholarworks.rit.edu/theses/10143/). This variant is referred to as the
+    classic variant.
     """
 
     def __init__(self, **kwargs):
@@ -28,10 +29,13 @@ class LVQT(_LVQT):
         nf_in = 1
         # Two channels (real/imag) for each bin going out
         nf_out = 2 * self.n_bins
+
         # Kernel must be as long as longest basis
         ks1 = self.basis.shape[1]
+
         # Stride the amount of samples necessary to take 'max_p' responses per frame
         self.sd1 = self.hop_length // self.max_p
+
         # Padding to start centered around the first real sample,
         # and end centered around the last real sample
         pd1 = self.basis.shape[1] // 2
@@ -43,6 +47,18 @@ class LVQT(_LVQT):
                                 kernel_size=ks1,
                                 stride=self.sd1,
                                 dropout=False)
+        if self.var_drop:
+            self.time_conv = VariationalDropoutConv1d(in_channels=nf_in,
+                                                      out_channels=nf_out,
+                                                      kernel_size=ks1,
+                                                      stride=self.sd1)
+        else:
+            self.time_conv = torch.nn.Conv1d(in_channels=nf_in,
+                                             out_channels=nf_out,
+                                             kernel_size=ks1,
+                                             stride=self.sd1,
+                                             bias=False)
+
 
         if not self.random:
             # Split the complex valued bases into real and imaginary weights

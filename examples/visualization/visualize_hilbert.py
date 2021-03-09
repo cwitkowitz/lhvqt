@@ -1,5 +1,5 @@
 # My imports
-from lhvqt.lvqt_orig import LVQT
+from lhvqt.lvqt_hilb import LVQT
 
 from lhvqt import LHVQT
 
@@ -10,24 +10,24 @@ import os
 
 def main():
     """
-    Simple visualization example for classic variant.
+    Simple visualization example for Hilbert variant.
     """
 
     # Construct the path to the directory for saving images
-    save_dir = os.path.join('..', '..', 'generated', 'visualization', 'classic')
+    save_dir = os.path.join('..', '..', 'generated', 'visualization', 'hilbert')
     os.makedirs(save_dir, exist_ok=True)
 
     # Select parameters to use
     sr = 22050
-    n_bins = 96  # 8 octaves
+    n_bins = 192  # 8 octaves
     gamma = None  # default gamma
     hop_length = 512
-    bins_per_octave = 12
+    bins_per_octave = 24
     fmin = librosa.note_to_hz('C1')
-    harmonics = [0.5, 1, 2, 3, 4, 5]
+    harmonics = [1]
 
-    # Construct the classic variant
-    lhvqt_classic = LHVQT(lvqt=LVQT,
+    # Construct the hilbert variant
+    lhvqt_hilbert = LHVQT(lvqt=LVQT,
                           harmonics=harmonics,
                           fs=sr,
                           hop_length=hop_length,
@@ -39,11 +39,11 @@ def main():
                           db_to_prob=False,
                           batch_norm=False)
 
-    # Visualize the classic variant
-    lhvqt_classic.visualize(save_dir,
+    # Visualize the hilbert variant
+    lhvqt_hilbert.visualize(save_dir,
                             idcs=None,
                             fix_scale=True,
-                            include_axis=True,
+                            include_axis=False,
                             n_fft=None,
                             scale_freqs=False,
                             decibels=True,

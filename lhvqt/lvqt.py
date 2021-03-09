@@ -11,7 +11,12 @@ from abc import abstractmethod
 import numpy as np
 import librosa
 import torch
+import math
 import os
+
+# TODO - customize font for visualization?
+#rcParams['font.family'] = 'sans-serif'
+#rcParams['font.sans-serif'] = ['Tahoma']
 
 
 class _LVQT(torch.nn.Module):
@@ -19,8 +24,8 @@ class _LVQT(torch.nn.Module):
     Abstract class to implement common functionality across LVQT variants.
     """
 
-    def __init__(self, fs=22050, hop_length=256, fmin=None, n_bins=360, bins_per_octave=60,
-                 gamma=0, random=False, max_p=1, to_db=True, db_to_prob=True, batch_norm=True):
+    def __init__(self, fs=22050, hop_length=256, fmin=None, n_bins=360, bins_per_octave=60, gamma=0,
+                 random=False, max_p=1, to_db=True, db_to_prob=True, batch_norm=True, var_drop=True):
         """
         Initialize parameters common to all LVQT variants.
 
@@ -48,6 +53,8 @@ class _LVQT(torch.nn.Module):
           Scale decibel values to be between 0 and 1 if log is taken
         batch_norm : bool
           Perform batch normalization
+        var_drop : bool
+          Perform variational dropout after the 1D convolutional layer
         """
 
         # Load PyTorch Module properties
@@ -63,6 +70,7 @@ class _LVQT(torch.nn.Module):
         self.to_db = to_db
         self.db_to_prob = db_to_prob
         self.batch_norm = batch_norm
+        self.var_drop = var_drop
 
         # Default the minimum frequency
         if fmin is None:
@@ -77,14 +85,26 @@ class _LVQT(torch.nn.Module):
             gamma = 24.7 * alpha / 0.108
         self.gamma = gamma
 
+        # Make sure no filters will be invalid
+        Q = 1 / (2.0 ** (1.0 / bins_per_octave) - 1.0)
+        center_freqs = fmin * (2.0 ** (np.arange(n_bins) / bins_per_octave))
+        band_bounds = center_freqs * (1 + 0.5 * librosa.filters.window_bandwidth('hann') / Q)
+        num_invalid = int(np.sum(band_bounds > fs / 2.0))
+
         # Get complex bases and their respective lengths for a variable-Q transform
-        self.basis, self.lengths = constant_q(sr=fs,
-                                              fmin=fmin,
-                                              n_bins=n_bins,
-                                              bins_per_octave=bins_per_octave,
-                                              gamma=gamma,
-                                              pad_fft=False,
-                                              norm=None)
+        basis, lengths = constant_q(sr=fs,
+                                    fmin=fmin,
+                                    n_bins=n_bins - num_invalid,
+                                    bins_per_octave=bins_per_octave,
+                                    gamma=gamma,
+                                    pad_fft=False,
+                                    norm=None)
+
+        zero_filters = np.zeros((num_invalid, basis.shape[-1]))
+        zero_lengths = np.zeros(num_invalid)
+
+        self.basis = np.concatenate((basis, zero_filters), axis=0)
+        self.lengths = np.concatenate((lengths, zero_lengths), axis=0)
 
         # Initialize max pooling to take 'max_p' responses per frame and aggregate with max operation
         self.mp = torch.nn.MaxPool1d(self.max_p)
@@ -288,9 +308,10 @@ class _LVQT(torch.nn.Module):
         self.visualize_freq_domain_fft_1d(fft_dir, **fft_1d_kwargs)
 
         fft_2d_path = os.path.join(fft_dir, f'all_2d.jpg')
+
         fft_2d_kwargs = filter_kwargs(['idcs',
                                        'n_fft',
-                                       'sort_by_centroid'
+                                       'sort_by_centroid',
                                        'include_axis',
                                        'scale_freqs',
                                        'include_negative'], **kwargs)
@@ -337,33 +358,33 @@ class _LVQT(torch.nn.Module):
         ax = SubplotZero(fig, 111)
         fig.add_subplot(ax)
 
-        if fix_scale:
-            # Make the y boundaries of each filter 10% of the maximum weight magnitude
-            ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
-
-        # Remove right, top, and bottom border
-        ax.axis['right'].set_visible(False)
-        ax.axis['top'].set_visible(False)
-        ax.axis['bottom'].set_visible(False)
-
-        if include_axis:
-            # Add X axes at origin
-            ax.axis['xzero'].set_visible(True)
-            # Only add X tick to show number of weights in the plot
-            ax.set_xticks([num_weights])
-            # Remove space padding along X axis
-            ax.set_xlim([0, num_weights])
-            # Add a grid to the axis
-            ax.grid(axis='y')
-        else:
-            # Remove the left border
-            ax.axis['left'].set_visible(False)
-
-        # Minimize free space
-        fig.tight_layout()
-
         # Loop through the filter indices
         for k in filter_idcs:
+            if fix_scale:
+                # Make the y boundaries of each filter 10% of the maximum weight magnitude
+                ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
+
+            # Remove right, top, and bottom border
+            ax.axis['right'].set_visible(False)
+            ax.axis['top'].set_visible(False)
+            ax.axis['bottom'].set_visible(False)
+
+            if include_axis:
+                # Add X axes at origin
+                ax.axis['xzero'].set_visible(True)
+                # Only add X tick to show number of weights in the plot
+                ax.set_xticks([num_weights])
+                # Remove space padding along X axis
+                ax.set_xlim([0, num_weights])
+                # Add a grid to the axis
+                ax.grid(axis='y')
+            else:
+                # Remove the left border
+                ax.axis['left'].set_visible(False)
+
+            # Minimize free space
+            fig.tight_layout()
+
             # Plot the real and imaginary weights separately
             ax.plot(real_weights[k], color='black', label='Real', alpha=0.75)
             ax.plot(imag_weights[k], color='purple', label='Imag', alpha=0.75)
@@ -375,8 +396,7 @@ class _LVQT(torch.nn.Module):
             fig.savefig(save_path)
 
             # Clear the plot in preparation for the next filter
-            ax.lines[0].remove()
-            ax.lines[0].remove()
+            ax.cla()
 
     def visualize_freq_domain_fft_1d(self, save_dir, idcs=None, n_fft=None, include_axis=False,
                                      scale_freqs=False, decibels=False, include_negative=False, separate=True):
@@ -439,6 +459,18 @@ class _LVQT(torch.nn.Module):
         ax.axis['right'].set_visible(False)
         ax.axis['top'].set_visible(False)
 
+        # Calculate the FFT response for all filters at once
+        freqs, resp = fft_response(comp_weights, self.fs, n_fft, decibels)
+
+        # Remove space padding along Y axis
+        ax.set_ylim(bottom=-80) if decibels else ax.set_ylim(bottom=0)
+
+        # Make the top boundary of Y axis 10% above maximum
+        if decibels:
+            ax.set_ylim(top=10 * math.log10(1.1) + np.max(resp))
+        else:
+            ax.set_ylim(top=1.1 * np.max(resp))
+
         if include_axis:
             # Add an appropriate label to the Y axis
             ax.set_ylabel('dB') if decibels else ax.set_ylabel('A')
@@ -451,9 +483,6 @@ class _LVQT(torch.nn.Module):
 
         # Minimize free space
         fig.tight_layout()
-
-        # Calculate the FFT response for all filters at once
-        freqs, resp = fft_response(comp_weights, self.fs, n_fft, decibels)
 
         if scale_freqs:
             # Scale the frequencies to be within [-1, 1]
@@ -492,7 +521,7 @@ class _LVQT(torch.nn.Module):
         n_fft : int or None (optional)
           See np.fft.fft documentation...
         sort_by_centroid : bool
-          Whether to order the filters by ascending spectral centroid
+          Whether to order the filters by ascending spectral centroid;
         include_axis : bool
           Whether to add X and Y axis and a grid along the Y axis
         scale_freqs : bool
@@ -508,7 +537,7 @@ class _LVQT(torch.nn.Module):
         comp_weights = self.get_comp_weights()
 
         # Calculate the FFT response for all filters at once
-        freqs, resp = fft_response(comp_weights, self.fs, n_fft, True)
+        freqs, resp = fft_response(comp_weights, self.fs, n_fft, False)
 
         # Determine the Nyquist
         nyquist = self.fs / 2
@@ -528,14 +557,17 @@ class _LVQT(torch.nn.Module):
 
         if sort_by_centroid:
             # Get the normalized response in case the filters are not normalized
-            norm_resp = resp / np.expand_dims(np.sum(resp, axis=-1), axis=-1)
+            norm_resp = resp / (np.expand_dims(np.sum(resp, axis=-1), axis=-1) + EPSILON)
 
             # Compute the spectral centroid of each filter
             centroids = np.dot(norm_resp[..., num_bins // 2:], freqs[num_bins // 2:])
-            centroids = centroids / np.sum(norm_resp[..., num_bins // 2:], axis=-1)
+            centroids = centroids / (np.sum(norm_resp[..., num_bins // 2:], axis=-1) + EPSILON)
 
             # Sort the filters by spectral centroid of positive frequency response
             resp = resp[np.argsort(centroids)]
+
+        # Convert the frequency response from amplitude to decibels
+        resp = librosa.amplitude_to_db(resp, ref=np.max)
 
         # Line up the response properly for the image
         resp = np.transpose(np.flip(resp, axis=-1))
@@ -554,7 +586,7 @@ class _LVQT(torch.nn.Module):
         y_bounds = [-nyquist ** (not scale_freqs), nyquist ** (not scale_freqs)]
 
         # Plot the response for all filters as an image
-        img = ax.imshow(resp, extent=[0, len(filter_idcs), y_bounds[0], y_bounds[1]], aspect='auto', cmap='Purples')
+        img = ax.imshow(resp, extent=[0, len(filter_idcs), y_bounds[0], y_bounds[1]], aspect='auto')
 
         # Remove right and top border
         ax.axis['right'].set_visible(False)

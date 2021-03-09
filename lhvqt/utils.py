@@ -1,108 +1,8 @@
-from torch.autograd import Variable
-from torch.nn.parameter import Parameter
-
-import torch.nn.functional as F
-import torch.nn as nn
 import numpy as np
 import librosa
 import torch
-import math
 
 EPSILON = torch.finfo(torch.float32).eps
-
-
-def Conv1d(in_channels, out_channels, kernel_size, stride, dropout=False):
-        # TODO - this doesn't feel neat. Seems more appropriate as a module
-        module = None
-
-        if dropout:
-            module = VariationalDropoutConv1d(in_channels=in_channels,
-                                              out_channels=out_channels,
-                                              kernel_size=kernel_size,
-                                              stride=stride)
-        else:
-            module = torch.nn.Conv1d(in_channels=in_channels,
-                                     out_channels=out_channels,
-                                     kernel_size=kernel_size,
-                                     stride=stride,
-                                     padding=0,
-                                     bias=False)
-
-        return module
-
-
-class VariationalDropoutConv1d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, log_sigma2=-10, threshold=math.inf):
-        """
-        TODO
-        :param input_size: An int of input size
-        :param log_sigma2: Initial value of log sigma ^ 2.
-               It is crusial for training since it determines initial value of alpha
-        :param threshold: Value for thresholding of validation. If log_alpha > threshold, then weight is zeroed
-        :param out_size: An int of output size
-        """
-        super(VariationalDropoutConv1d, self).__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-
-        self.weight = Parameter(torch.FloatTensor(out_channels, in_channels, kernel_size))
-
-        self.log_sigma2 = Parameter(torch.FloatTensor(self.weight.size()).fill_(log_sigma2))
-        self.log_alpha = None
-
-        self.reset_parameters()
-
-        self.k = [0.63576, 1.87320, 1.48695]
-
-        self.threshold = threshold
-
-    def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.out_channels)
-
-        self.weight.data.uniform_(-stdv, stdv)
-
-    @staticmethod
-    def clip(input, to=math.inf):
-        input = input.masked_fill(input < -to, -to)
-        input = input.masked_fill(input > to, to)
-
-        return input
-
-    def forward(self, input):
-        """
-        TODO
-        :param input: An float tensor with shape of [batch_size, input_size]
-        :return: An float tensor with shape of [batch_size, out_size] and negative layer-kld estimation
-        """
-
-        log_alpha = self.clip(self.log_sigma2 - torch.log(self.weight ** 2 + EPSILON))
-        self.log_alpha = log_alpha
-
-        if not self.training:
-            mask = log_alpha > self.threshold
-            return F.conv1d(input, weight=self.weight.masked_fill(mask, 0), stride=self.stride)
-
-        mu = F.conv1d(input, weight=self.weight, stride=self.stride)
-        std = torch.sqrt(F.conv1d(input ** 2, weight=self.log_sigma2.exp(), stride=self.stride) + EPSILON)
-
-        eps = Variable(torch.randn(*mu.size())).to(input.device)
-
-        #print(f'mu: [{torch.min(mu)}, {torch.max(mu)}]\nstd: [{torch.min(std)}, {torch.max(std)}]\neps: [{torch.min(eps)}, {torch.max(eps)}]')
-        return std * eps + mu
-
-    def max_alpha(self):
-        log_alpha = self.log_sigma2 - self.weight ** 2
-        return torch.max(log_alpha.exp())
-
-    def kld(self, log_alpha):
-
-        first_term = self.k[0] * F.sigmoid(self.k[1] + self.k[2] * log_alpha)
-        second_term = 0.5 * torch.log(1 + torch.exp(-log_alpha))
-
-        return -(first_term - second_term - self.k[0]).sum() / (self.in_channels * self.out_channels * self.kernel_size)
 
 
 def torch_amplitude_to_db(feats, amin=1e-10, top_db=80.0, to_prob=False):
@@ -262,7 +162,7 @@ def fft_response(signal, sample_rate, n_fft=None, decibels=False):
     response = np.abs(np.fft.fft(signal, n=n_fft))
 
     if decibels:
-        # Convert the frequency resposne from amplitude to decibels
+        # Convert the frequency response from amplitude to decibels
         response = librosa.amplitude_to_db(response, ref=np.max)
 
     # Determine the number of bins in the response
