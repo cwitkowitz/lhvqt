@@ -1,14 +1,12 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from .lvqt import _LVQT
-from .utils import *
+from .variational import *
 
 # Regular imports
-from matplotlib import pyplot as plt
-from librosa.filters import constant_q
 import numpy as np
-import librosa
 import torch
-import os
 
 
 class LVQT(_LVQT):
@@ -31,28 +29,23 @@ class LVQT(_LVQT):
         nf_in = 1
         # One channel (real) for each bin going out
         nf_out = self.n_bins
-        # Kernel must be as long as longest basis
-        ks1 = self.basis.shape[1]
-        # Stride the amount of samples necessary to take 'max_p' responses per frame
-        self.sd1 = self.hop_length // self.max_p
-        # Padding to start centered around the first real sample,
-        # and end centered around the last real sample
-        pd1 = self.basis.shape[1] // 2
-        self.pd1 = (pd1, self.basis.shape[1] - pd1)
 
         # Initialize the 1D convolutional filterbank
-        self.time_conv = Conv1d(in_channels=nf_in,
-                                out_channels=nf_out,
-                                kernel_size=ks1,
-                                stride=self.sd1,
-                                dropout=False)
+        if self.var_drop:
+            self.time_conv = VariationalDropoutConv1d(in_channels=nf_in, out_channels=nf_out,
+                                                      kernel_size=self.ks1, stride=self.sd1,
+                                                      log_sigma2=self.var_drop)
+        else:
+            self.time_conv = torch.nn.Conv1d(in_channels=nf_in, out_channels=nf_out,
+                                             kernel_size=self.ks1, stride=self.sd1,
+                                             bias=False)
 
         if not self.random:
             # Get the real weights from the complex valued bases
             real_weights = np.real(self.basis)
-            # View the real/imag channels as independent filters
-            real_weights = torch.Tensor(real_weights).view(nf_out, 1, ks1)
-            # Manually set the Conv1d parameters with the real/imag weights
+            # Add a channel dimension to the weights
+            real_weights = torch.Tensor(real_weights).view(nf_out, 1, self.ks1)
+            # Manually set the Conv1d parameters to the weights
             self.time_conv.weight = torch.nn.Parameter(real_weights)
 
     def forward(self, audio):
@@ -75,13 +68,8 @@ class LVQT(_LVQT):
           T - number of time steps (frames)
         """
 
-        # Pad the audio so the last frame of samples can be used
-        audio = super().pad_audio(audio)
-        # We manually do the padding for the convolutional
-        # layer to allow for different front/back padding
-        padded_audio = torch.nn.functional.pad(audio, self.pd1)
-        # Convolve the audio with the filterbank of real weights
-        feats = self.time_conv(padded_audio)
+        # Run the standard convolution steps
+        feats = super().forward(audio)
 
         # Perform post-processing steps
         feats = self.post_proc(feats)
@@ -90,7 +78,7 @@ class LVQT(_LVQT):
 
     def get_real_weights(self):
         """
-        Obtain the weights of the real part of the transform.
+        Obtain the real-valued weights.
 
         Returns
         ----------
@@ -102,6 +90,7 @@ class LVQT(_LVQT):
 
         real_weights = self.time_conv.weight
         real_weights = real_weights.squeeze()
+
         return real_weights
 
     def get_imag_weights(self):
@@ -119,4 +108,5 @@ class LVQT(_LVQT):
         real_weights = self.get_real_weights()
         imag_weights = torch.zeros(real_weights.size())
         imag_weights = imag_weights.to(real_weights.device)
+
         return imag_weights

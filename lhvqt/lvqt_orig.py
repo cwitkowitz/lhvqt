@@ -1,6 +1,8 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from .lvqt import _LVQT
-from .utils import *
+from .variational import *
 
 # Regular imports
 import numpy as np
@@ -30,35 +32,15 @@ class LVQT(_LVQT):
         # Two channels (real/imag) for each bin going out
         nf_out = 2 * self.n_bins
 
-        # Kernel must be as long as longest basis
-        ks1 = self.basis.shape[1]
-
-        # Stride the amount of samples necessary to take 'max_p' responses per frame
-        self.sd1 = self.hop_length // self.max_p
-
-        # Padding to start centered around the first real sample,
-        # and end centered around the last real sample
-        pd1 = self.basis.shape[1] // 2
-        self.pd1 = (pd1, self.basis.shape[1] - pd1)
-
         # Initialize the 1D convolutional filterbank
-        self.time_conv = Conv1d(in_channels=nf_in,
-                                out_channels=nf_out,
-                                kernel_size=ks1,
-                                stride=self.sd1,
-                                dropout=False)
         if self.var_drop:
-            self.time_conv = VariationalDropoutConv1d(in_channels=nf_in,
-                                                      out_channels=nf_out,
-                                                      kernel_size=ks1,
-                                                      stride=self.sd1)
+            self.time_conv = VariationalDropoutConv1d(in_channels=nf_in, out_channels=nf_out,
+                                                      kernel_size=self.ks1, stride=self.sd1,
+                                                      log_sigma2=self.var_drop)
         else:
-            self.time_conv = torch.nn.Conv1d(in_channels=nf_in,
-                                             out_channels=nf_out,
-                                             kernel_size=ks1,
-                                             stride=self.sd1,
+            self.time_conv = torch.nn.Conv1d(in_channels=nf_in, out_channels=nf_out,
+                                             kernel_size=self.ks1, stride=self.sd1,
                                              bias=False)
-
 
         if not self.random:
             # Split the complex valued bases into real and imaginary weights
@@ -67,7 +49,7 @@ class LVQT(_LVQT):
             complex_weights = np.array([[real_weights[i]] + [imag_weights[i]]
                                         for i in range(self.n_bins)])
             # View the real/imag channels as independent filters
-            complex_weights = torch.Tensor(complex_weights).view(nf_out, 1, ks1)
+            complex_weights = torch.Tensor(complex_weights).view(nf_out, 1, self.ks1)
             # Manually set the Conv1d parameters with the real/imag weights
             self.time_conv.weight = torch.nn.Parameter(complex_weights)
 
@@ -94,13 +76,9 @@ class LVQT(_LVQT):
           T - number of time steps (frames)
         """
 
-        # Pad the audio so the last frame of samples can be used
-        #audio = super().pad_audio(audio)
-        # We manually do the padding for the convolutional
-        # layer to allow for different front/back padding
-        padded_audio = torch.nn.functional.pad(audio, self.pd1)
-        # Convolve the audio with the filterbank
-        feats = self.time_conv(padded_audio)
+        # Run the standard convolution steps
+        feats = super().forward(audio)
+
         # Switch filter and frame dimension
         feats = feats.transpose(1, 2)
         # Perform l2 pooling across the filter dimension
@@ -127,6 +105,7 @@ class LVQT(_LVQT):
 
         weights = self.time_conv.weight
         weights = weights.view(self.n_bins, 2, -1)
+
         return weights
 
     def get_real_weights(self):
@@ -143,6 +122,7 @@ class LVQT(_LVQT):
 
         comp_weights = self.get_weights()
         real_weights = comp_weights[:, 0]
+
         return real_weights
 
     def get_imag_weights(self):
@@ -159,4 +139,5 @@ class LVQT(_LVQT):
 
         comp_weights = self.get_weights()
         imag_weights = comp_weights[:, 1]
+
         return imag_weights

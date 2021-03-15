@@ -1,12 +1,11 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from .lhvqt import *
-from .lvqt_orig import *
 
 # Regular imports
-import librosa
 import torch.nn as nn
 import torch
-import os
 
 
 class LHVQT_COMB(LHVQT):
@@ -37,21 +36,28 @@ class LHVQT_COMB(LHVQT):
         # Obtain a pointer to the lower-level modules
         lvqt_modules = self.get_modules()
 
-        # TODO - overwrite self.tfs
+        # Reset the collection of filterbanks
+        self.tfs = nn.Module()
+        # Use the filterbank associated with the lowest harmonic to match hyperparameters
+        self.tfs.add_module('lvqt', lvqt_modules[0])
 
-        self.comb = lvqt_modules[0]
-        weights = self.comb.time_conv.weight
+        # Get the weights from the lowest harmonic
+        harmonic_weights = lvqt_modules[0].time_conv.weight
 
+        # Loop through harmonics
         for h in range(1, len(self.harmonics)):
-            basis = lvqt_modules[h].time_conv.weight
+            # Get the filterbank weights associated with the harmonic
+            weights = lvqt_modules[h].time_conv.weight
 
-            pad_amt = weights.size(-1) - basis.size(-1)
+            # Pad the weights to match the size of the lowest harmonic
+            pad_amt = harmonic_weights.size(-1) - weights.size(-1)
+            # Distribute the padding among both sides of the weights
             pad = (pad_amt // 2, pad_amt - pad_amt // 2)
+            # Pad and add the weights to the summed harmonic weights
+            harmonic_weights = harmonic_weights + nn.functional.pad(weights, pad=pad)
 
-            basis = nn.functional.pad(basis, pad=pad)
-            weights = weights + basis
-
-        self.comb.time_conv.weight = torch.nn.Parameter(weights)
+        # Replace the filterbank weights with the summer harmonic weights
+        self.tfs.lvqt.time_conv.weight = torch.nn.Parameter(harmonic_weights)
 
     def forward(self, wav):
         """
@@ -74,7 +80,8 @@ class LHVQT_COMB(LHVQT):
           T - number of time steps (frames)
         """
 
-        feats = self.comb(wav).unsqueeze(0)
+        # Run the audio through the singular module
+        feats = self.tfs.lvqt(wav).unsqueeze(0)
         # Switch harmonic and batch dimension
         feats = feats.transpose(1, 0)
 
@@ -98,10 +105,21 @@ class LHVQT_COMB(LHVQT):
         """
 
         # Number of hops in the audio plus one
-        num_frames = self.comb.get_expected_frames(audio)
+        num_frames = self.tfs.lvqt.get_expected_frames(audio)
 
         return num_frames
 
     def visualize(self, save_dir, **kwargs):
-        # Visualize the harmonic comb
-        self.comb.visualize(save_dir, **kwargs)
+        """
+        Perform visualization steps.
+
+        Parameters
+        ----------
+        save_dir : string
+          Top-level directory to hold images of all plots
+        **kwargs : N/A
+          Arguments for generating plots
+        """
+
+        # Visualize the singular module
+        self.tfs.lvqt.visualize(save_dir, **kwargs)

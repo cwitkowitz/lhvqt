@@ -1,3 +1,5 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from lhvqt.lvqt_hilb import LVQT
 
@@ -19,10 +21,10 @@ def main():
 
     # Select parameters to use
     sr = 22050
-    n_bins = 192  # 8 octaves
+    n_bins = 480  # 8 octaves
     gamma = None  # default gamma
     hop_length = 512
-    bins_per_octave = 24
+    bins_per_octave = 60
     fmin = librosa.note_to_hz('C1')
     harmonics = [1]
 

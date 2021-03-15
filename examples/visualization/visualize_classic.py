@@ -1,3 +1,5 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from lhvqt.lvqt_orig import LVQT
 

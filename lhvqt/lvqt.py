@@ -1,3 +1,5 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from .utils import *
 
@@ -14,6 +16,7 @@ import torch
 import math
 import os
 
+# TODO - add label to frequency axis?
 # TODO - customize font for visualization?
 #rcParams['font.family'] = 'sans-serif'
 #rcParams['font.sans-serif'] = ['Tahoma']
@@ -25,7 +28,8 @@ class _LVQT(torch.nn.Module):
     """
 
     def __init__(self, fs=22050, hop_length=256, fmin=None, n_bins=360, bins_per_octave=60, gamma=0,
-                 random=False, max_p=1, to_db=True, db_to_prob=True, batch_norm=True, var_drop=True):
+                 max_p=1, random=False, update=True, to_db=True, db_to_prob=True, batch_norm=True,
+                 var_drop=False):
         """
         Initialize parameters common to all LVQT variants.
 
@@ -43,18 +47,23 @@ class _LVQT(torch.nn.Module):
           Number of basis functions per octave
         gamma : float
           Bandwidth offset to smoothly vary Q-factor
-        random : bool
-          Keep the weights random instead of loading in the bases
         max_p : int
           Kernel size and stride for max pooling operation (1 to disable)
+          Note : values which go evenly into the hop length are ideal
+               - otherwise, integer divide will result in mini-hops which
+               - do not add up exactly to the overall hop length
+        random : bool
+          Keep the weights random instead of loading in the bases
+        update : bool
+          Whether to update the weights or ignore the gradients
         to_db : bool
           Convert features from amplitude to decibels
         db_to_prob : bool
           Scale decibel values to be between 0 and 1 if log is taken
         batch_norm : bool
           Perform batch normalization
-        var_drop : bool
-          Perform variational dropout after the 1D convolutional layer
+        var_drop : float
+          Doubles as switch (0 to disable) for variational dropout and initial value of log_sigma ^ 2
         """
 
         # Load PyTorch Module properties
@@ -65,8 +74,9 @@ class _LVQT(torch.nn.Module):
         self.hop_length = hop_length
         self.n_bins = n_bins
         self.bins_per_octave = bins_per_octave
-        self.random = random
         self.max_p = max_p
+        self.random = random
+        self.update = update
         self.to_db = to_db
         self.db_to_prob = db_to_prob
         self.batch_norm = batch_norm
@@ -85,10 +95,13 @@ class _LVQT(torch.nn.Module):
             gamma = 24.7 * alpha / 0.108
         self.gamma = gamma
 
-        # Make sure no filters will be invalid
-        Q = 1 / (2.0 ** (1.0 / bins_per_octave) - 1.0)
+        # Determine the center frequencies of initialized basis functions
         center_freqs = fmin * (2.0 ** (np.arange(n_bins) / bins_per_octave))
+        # Calculate the constant Q factor necessary for the chosen resolution
+        Q = 1 / (2.0 ** (1.0 / bins_per_octave) - 1.0)
+        # Determine the upper boundary of each filters' bandwidth
         band_bounds = center_freqs * (1 + 0.5 * librosa.filters.window_bandwidth('hann') / Q)
+        # Determine the number of invalid filters (past Nyquist)
         num_invalid = int(np.sum(band_bounds > fs / 2.0))
 
         # Get complex bases and their respective lengths for a variable-Q transform
@@ -100,15 +113,25 @@ class _LVQT(torch.nn.Module):
                                     pad_fft=False,
                                     norm=None)
 
+        # Fill in space leftover from invalid filters with zeros
         zero_filters = np.zeros((num_invalid, basis.shape[-1]))
         zero_lengths = np.zeros(num_invalid)
 
+        # Append any zero filters to the bases
         self.basis = np.concatenate((basis, zero_filters), axis=0)
         self.lengths = np.concatenate((lengths, zero_lengths), axis=0)
 
-        # Initialize max pooling to take 'max_p' responses per frame and aggregate with max operation
-        self.mp = torch.nn.MaxPool1d(self.max_p)
+        # Stride the amount of samples necessary to take 'max_p' responses per frame
+        self.sd1 = self.hop_length // self.max_p
+        # Padding to start centered around the first real sample,
+        # and end centered around the last real sample
+        pd1 = self.basis.shape[1] // 2
+        self.pd1 = (pd1, self.basis.shape[1] - pd1)
+        # Kernel must be as long as longest basis
+        self.ks1 = self.basis.shape[1]
 
+        # Initialize max pooling to take 'max_p' responses per frame and aggregate with max operation
+        self.mp = torch.nn.MaxPool2d((1, self.max_p))
         # Initialize batch normalization to normalize the output of each channel
         self.bn = torch.nn.BatchNorm1d(self.n_bins)
 
@@ -123,9 +146,30 @@ class _LVQT(torch.nn.Module):
           Audio for a batch of tracks,
           B - batch size
           T - number of samples (a.k.a. sequence length)
+
+        Returns
+        ----------
+        feats : Tensor (B x F x T)
+          Features calculated for a batch of tracks,
+          B - batch size
+          F - dimensionality of features (number of bins)
+          T - number of time steps (frames)
         """
 
-        return NotImplementedError
+        # We manually do the padding for the convolutional
+        # layer to allow for different front/back padding
+        padded_audio = torch.nn.functional.pad(audio, self.pd1)
+
+        # Convolve the audio with the filterbank of real weights
+        if self.update:
+            # Feed-forward as normal
+            feats = self.time_conv(padded_audio)
+        else:
+            with torch.no_grad():
+                # Disable gradient accumulation
+                feats = self.time_conv(padded_audio)
+
+        return feats
 
     @abstractmethod
     def post_proc(self, feats):
@@ -146,9 +190,12 @@ class _LVQT(torch.nn.Module):
           Post-processed features for a batch of track.
         """
 
+        # Pad by 1 frame less than the max pooling amount
+        pad_amt, half_pad = self.max_p - 1, (self.max_p - 1) // 2
+        # Pad the features so any extra frames are not thrown away
+        padded_feats = torch.nn.functional.pad(feats, (half_pad, pad_amt - half_pad))
         # Perform max pooling operation
-        # TODO - fix max pooling
-        #feats = self.mp(feats)
+        feats = self.mp(padded_feats)
 
         if self.to_db:
             # Convert the raw filterbank output to decibels
@@ -158,13 +205,12 @@ class _LVQT(torch.nn.Module):
         num_frames = feats.size(-1)
 
         if self.batch_norm and not (self.training and num_frames <= 1):
+            # TODO - cannot remember why the checked case is necessary
             # Perform batch normalization
             feats = self.bn(feats)
 
         return feats
 
-    # TODO - make padding for extra frame optional with self.pad param and put padding
-    #        into forward of this abstract class - it will also affect expected frames
     def pad_audio(self, audio):
         """
         Pad audio to squeeze another frame out of trailing samples.
@@ -189,7 +235,7 @@ class _LVQT(torch.nn.Module):
 
         return audio
 
-    def get_expected_frames(self, audio, padded=True):
+    def get_expected_frames(self, audio):
         """
         Determine the number of frames we expect from provided audio.
 
@@ -199,8 +245,6 @@ class _LVQT(torch.nn.Module):
           Audio for a batch of tracks,
           B - batch size
           T - number of samples (a.k.a. sequence length)
-        padded : bool
-          Whether to factor in padding
 
         Returns
         ----------
@@ -208,13 +252,8 @@ class _LVQT(torch.nn.Module):
           Number of frames which will be generated for given audio
         """
 
-        #if padded:
-        # TODO - think this is related to max pooling breaking
-        #    # Pad the audio before calculating expected frames (should add one more)
-        #    audio = self.pad_audio(torch.Tensor(audio))
-
         # Number of hops in the audio plus one
-        num_frames = audio.shape[-1] // self.hop_length + 1
+        num_frames = audio.shape[-1] // (self.sd1 * self.max_p) + 1
 
         return num_frames
 
@@ -287,16 +326,33 @@ class _LVQT(torch.nn.Module):
         return comp_weights
 
     def visualize(self, save_dir, **kwargs):
+        """
+        Visualization function which extracts relevant keyword arguments and
+        runs all visualization functions.
+
+        Parameters
+        ----------
+        save_dir : string
+          Top-level directory to hold images of all plots
+        **kwargs : N/A
+          Arguments for generating plots
+        """
+
+        # Create directory for time-domain visualization
         time_dir = os.path.join(save_dir, 'time')
 
+        # Extact keyword arguments for time-domain visualization
         time_kwargs = filter_kwargs(['idcs',
                                      'fix_scale',
                                      'include_axis'], **kwargs)
 
+        # Visualize filters in time-domain
         self.visualize_time_domain_complex(time_dir, **time_kwargs)
 
+        # Create directory for frequency-domain visualization
         fft_dir = os.path.join(save_dir, 'fft')
 
+        # Extact keyword arguments for 1D frequency-domain visualization
         fft_1d_kwargs = filter_kwargs(['idcs',
                                        'n_fft',
                                        'include_axis',
@@ -305,16 +361,21 @@ class _LVQT(torch.nn.Module):
                                        'include_negative',
                                        'separate'], **kwargs)
 
+        # Visualize filters in 1D frequency-domain
         self.visualize_freq_domain_fft_1d(fft_dir, **fft_1d_kwargs)
 
+        # Create path for 2D frequency-domain plot
         fft_2d_path = os.path.join(fft_dir, f'all_2d.jpg')
 
+        # Extact keyword arguments for 2D frequency-domain visualization
         fft_2d_kwargs = filter_kwargs(['idcs',
                                        'n_fft',
                                        'sort_by_centroid',
                                        'include_axis',
                                        'scale_freqs',
                                        'include_negative'], **kwargs)
+
+        # Visualize filters in 2D frequency-domain
         self.visualize_freq_domain_fft_2d(fft_2d_path, **fft_2d_kwargs)
 
     def visualize_time_domain_complex(self, save_dir, idcs=None, fix_scale=False, include_axis=False):
@@ -397,6 +458,9 @@ class _LVQT(torch.nn.Module):
 
             # Clear the plot in preparation for the next filter
             ax.cla()
+
+        # Close the figure
+        plt.close(fig)
 
     def visualize_freq_domain_fft_1d(self, save_dir, idcs=None, n_fft=None, include_axis=False,
                                      scale_freqs=False, decibels=False, include_negative=False, separate=True):
@@ -507,6 +571,9 @@ class _LVQT(torch.nn.Module):
             # Save the figure, now that it is complete
             fig.savefig(save_path)
 
+        # Close the figure
+        plt.close(fig)
+
     def visualize_freq_domain_fft_2d(self, save_path, idcs=None, n_fft=None, sort_by_centroid=False,
                                      include_axis=False, scale_freqs=False, include_negative=False):
         """
@@ -611,5 +678,6 @@ class _LVQT(torch.nn.Module):
         # Minimize free space
         fig.tight_layout()
 
-        # Save the figure
+        # Save and close the figure
         fig.savefig(save_path)
+        plt.close(fig)

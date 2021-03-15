@@ -1,3 +1,5 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from .lvqt_orig import *
 
@@ -6,12 +8,10 @@ import librosa
 import torch
 import os
 
-# TODO - abstract expected frames and plotting functions?
-
 
 class LHVQT(torch.nn.Module):
     """
-    Harmonic learnable filterbank.
+    Learnable filterbank with various HVQT initialization capabilties.
     """
 
     def __init__(self, fmin=None, harmonics=None, lvqt=None, **kwargs):
@@ -47,7 +47,7 @@ class LHVQT(torch.nn.Module):
 
         # Default the class definition for the lower-level module
         if lvqt is None:
-            # Original LVQT module
+            # Classic LVQT module
             lvqt = LVQT
 
         # Create a PyTorch Module to hold LVQTs
@@ -63,6 +63,15 @@ class LHVQT(torch.nn.Module):
             self.tfs.add_module(mod_name, lvqt(fmin=fmin, **kwargs))
 
     def get_modules(self):
+        """
+        Helper function to extract pointers to the lower-level modules.
+
+        Returns
+        ----------
+        lvqt_modules : list of _LVQT
+          Pointers to each module in the harmonic filterbank
+        """
+
         # Obtain a pointer to the lower-level modules
         lvqt_modules = torch.nn.Sequential(*list(self.tfs.children()))
 
@@ -135,14 +144,25 @@ class LHVQT(torch.nn.Module):
         num_frames = [lvqt_modules[h].get_expected_frames(audio)
                       for h in range(len(self.harmonics))]
 
-        # Make sure the expected frame count of each module is the same
-        assert len(set(num_frames)) == 1
-        # Collapse the expected frame counts
-        num_frames = num_frames[0]
+        # Check if count of each module is the same
+        if len(set(num_frames)) == 1:
+            # Collapse the expected frame counts
+            num_frames = num_frames[0]
 
         return num_frames
 
     def visualize(self, save_dir, **kwargs):
+        """
+        Perform visualization steps for each lower-level module.
+
+        Parameters
+        ----------
+        save_dir : string
+          Top-level directory to hold images of all plots
+        **kwargs : N/A
+          Arguments for generating plots
+        """
+
         # Obtain a pointer to the lower-level modules
         lvqt_modules = self.get_modules()
 

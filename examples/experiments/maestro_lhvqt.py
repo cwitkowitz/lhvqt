@@ -1,3 +1,5 @@
+# Author: Frank Cwitkowitz <fcwitkow@ur.rochester.edu>
+
 # My imports
 from amt_models.models import OnsetsFrames2
 from amt_models.datasets import MAESTRO_V1, MAPS
@@ -9,6 +11,8 @@ from amt_models.evaluate import *
 
 import amt_models.tools as tools
 
+import lhvqt as l
+
 # Regular imports
 from sacred.observers import FileStorageObserver
 from torch.utils.data import DataLoader
@@ -19,7 +23,7 @@ import os
 
 EX_NAME = '_'.join([OnsetsFrames2.model_name(),
                     MAESTRO_V1.dataset_name(),
-                    LHVQT.features_name()])
+                    LHVQT.features_name(), 'warm_delay_train'])
 
 ex = Experiment('Onsets & Frames 2 w/ LHVQT on MAESTRO')
 
@@ -48,7 +52,7 @@ def config():
     learning_rate = 5e-4
 
     # The id of the gpu to use, if available
-    gpu_id = 0
+    gpu_id = 1
 
     # Flag to re-acquire ground-truth data and re-calculate-features
     # This is useful if testing out different feature extraction parameters
@@ -95,7 +99,7 @@ def visualize(model, i=None):
                                 sort_by_centroid=True)
 
 
-class OnsetsFramesLHVQT(OnsetsFrames2):
+class OnsetsFrames2LHVQT(OnsetsFrames2):
     """
     Implements the Onsets & Frames model (V2) with a learnable filterbank frontend.
     """
@@ -140,17 +144,22 @@ class OnsetsFramesLHVQT(OnsetsFrames2):
         # Check to see if loss is being tracked
         if tools.KEY_LOSS in output.keys():
             # Obtain a pointer to the filterbank module
-            fb_module = torch.nn.Sequential(*list(self.frontend.fb.tfs.children()))[0].time_conv
+            fb_module = self.frontend.fb.get_modules()[0]
 
             # Extract all of the losses
             loss = output[tools.KEY_LOSS]
 
             # Calculate the KL-divergence term
-            loss[tools.KEY_LOSS_KLD] = fb_module.kld(fb_module.log_alpha)
+            loss[tools.KEY_LOSS_KLD] = fb_module.time_conv.kld()
 
             # Compute the total loss and add it back to the output dictionary
-            loss[tools.KEY_LOSS_TOTAL] += loss[tools.KEY_LOSS_KLD]
+            loss[tools.KEY_LOSS_TOTAL] += (max(min(self.iter - 250, 500), 0) / 500) * loss[tools.KEY_LOSS_KLD]
+            #loss[tools.KEY_LOSS_TOTAL] += loss[tools.KEY_LOSS_KLD]
             output[tools.KEY_LOSS] = loss
+
+            if self.iter == 250:
+                # Turn on training mode for filterbank
+                fb_module.update = True
 
         return output
 
@@ -169,18 +178,21 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
     dim_out = profile.get_range_len()
     model_complexity = 3
 
-    from lhvqt.lvqt_hilb import LVQT as lower
-    from lhvqt.lhvqt import LHVQT as upper
     # Initialize learnable filterbank data processing module
-    lhvqt = LHVQT(sample_rate=sample_rate,
-                  hop_length=hop_length,
-                  lhvqt=upper,
-                  lvqt=lower,
-                  n_bins=dim_in,
-                  bins_per_octave=60,
-                  harmonics=[1],
-                  random=False)
-    data_proc = lhvqt
+    data_proc = LHVQT(sample_rate=sample_rate,
+                      hop_length=hop_length,
+                      lhvqt=l.lhvqt.LHVQT,
+                      lvqt=l.lvqt_hilb.LVQT,
+                      fmin=None,
+                      harmonics=[1],
+                      n_bins=dim_in,
+                      bins_per_octave=60,
+                      gamma=None,
+                      max_p=1,
+                      random=False,
+                      update=False,
+                      batch_norm=True,
+                      var_drop=-20)
 
     # Initialize the estimation pipeline
     validation_estimator = ComboEstimator([NoteTranscriber(profile=profile),
@@ -254,7 +266,7 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
     print('Initializing model...')
 
     # Initialize a new instance of the model
-    onsetsframes = OnsetsFramesLHVQT(dim_in, profile, data_proc.get_num_channels(), lhvqt, model_complexity, True, gpu_id)
+    onsetsframes = OnsetsFrames2LHVQT(dim_in, profile, data_proc.get_num_channels(), data_proc, model_complexity, True, gpu_id)
     onsetsframes.change_device()
     onsetsframes.train()
 
