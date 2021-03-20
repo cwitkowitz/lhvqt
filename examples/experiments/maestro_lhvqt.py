@@ -23,7 +23,7 @@ import os
 
 EX_NAME = '_'.join([OnsetsFrames2.model_name(),
                     MAESTRO_V1.dataset_name(),
-                    LHVQT.features_name(), 'warm_delay_train'])
+                    LHVQT.features_name(), 'rand_10'])
 
 ex = Experiment('Onsets & Frames 2 w/ LHVQT on MAESTRO')
 
@@ -52,7 +52,7 @@ def config():
     learning_rate = 5e-4
 
     # The id of the gpu to use, if available
-    gpu_id = 1
+    gpu_id = 0
 
     # Flag to re-acquire ground-truth data and re-calculate-features
     # This is useful if testing out different feature extraction parameters
@@ -153,13 +153,13 @@ class OnsetsFrames2LHVQT(OnsetsFrames2):
             loss[tools.KEY_LOSS_KLD] = fb_module.time_conv.kld()
 
             # Compute the total loss and add it back to the output dictionary
-            loss[tools.KEY_LOSS_TOTAL] += (max(min(self.iter - 250, 500), 0) / 500) * loss[tools.KEY_LOSS_KLD]
-            #loss[tools.KEY_LOSS_TOTAL] += loss[tools.KEY_LOSS_KLD]
+            #loss[tools.KEY_LOSS_TOTAL] += (max(min(self.iter - 250, 250), 0) / 500) * loss[tools.KEY_LOSS_KLD]
+            loss[tools.KEY_LOSS_TOTAL] += loss[tools.KEY_LOSS_KLD]
             output[tools.KEY_LOSS] = loss
 
-            if self.iter == 250:
+            #if self.iter == 250:
                 # Turn on training mode for filterbank
-                fb_module.update = True
+            #    fb_module.update = True
 
         return output
 
@@ -189,10 +189,10 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
                       bins_per_octave=60,
                       gamma=None,
                       max_p=1,
-                      random=False,
-                      update=False,
+                      random=True,
+                      update=True,
                       batch_norm=True,
-                      var_drop=-20)
+                      var_drop=-10)
 
     # Initialize the estimation pipeline
     validation_estimator = ComboEstimator([NoteTranscriber(profile=profile),
@@ -296,7 +296,10 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
     print('Transcribing and evaluating test partition...')
 
     # Add save directories to the estimators
-    validation_estimator.set_save_dirs(os.path.join(root_dir, 'estimated'), ['notes', 'pitch'])
+    validation_estimator.set_save_dirs(os.path.join(root_dir, 'estimated', 'MAESTRO'), ['notes', 'pitch'])
+
+    # Add a save directory to the evaluators and reset the patterns
+    validation_evaluator.set_save_dir(os.path.join(root_dir, 'results', 'MAESTRO'))
 
     # Add a save directory to the evaluators and reset the patterns
     validation_evaluator.set_save_dir(os.path.join(root_dir, 'results'))
@@ -310,6 +313,12 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
 
     # Reset the evaluator
     validation_evaluator.reset_results()
+
+    # Update save directories for the estimators
+    validation_estimator.set_save_dirs(os.path.join(root_dir, 'estimated', 'MAPS'), ['notes', 'pitch'])
+
+    # Update save directory for the evaluators
+    validation_evaluator.set_save_dir(os.path.join(root_dir, 'results', 'MAPS'))
 
     # Get the average results for the MAPS testing partition
     results = validate(onsetsframes, maps_test, evaluator=validation_evaluator, estimator=validation_estimator)
