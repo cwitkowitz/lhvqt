@@ -7,7 +7,7 @@ setup(
     author_email='fcwitkow@ur.rochester.edu',
     packages=['lhvqt'],
     install_requires=['numpy', 'librosa', 'torch'],
-    version='0.2.0',
+    version='0.3.0',
     license='MIT',
     description='Fine-tuneable filterbank front-end which implements a HVQT',
     long_description=open('README.md').read()

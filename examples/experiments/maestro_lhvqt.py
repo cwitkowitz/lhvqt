@@ -2,7 +2,7 @@
 
 # My imports
 from amt_models.models import OnsetsFrames2
-from amt_models.datasets import MAESTRO_V1, MAPS
+from amt_models.datasets import MAESTRO_V3, MAPS
 from amt_models.features import LHVQT
 
 from amt_models import train, validate
@@ -22,8 +22,9 @@ import torch
 import os
 
 EX_NAME = '_'.join([OnsetsFrames2.model_name(),
-                    MAESTRO_V1.dataset_name(),
-                    LHVQT.features_name(), 'rand_10'])
+                    MAESTRO_V3.dataset_name(),
+                    LHVQT.features_name(),
+                    'X'])
 
 ex = Experiment('Onsets & Frames 2 w/ LHVQT on MAESTRO')
 
@@ -37,19 +38,19 @@ def config():
     hop_length = 512
 
     # Number of consecutive frames within each example fed to the model
-    num_frames = 300
+    num_frames = 625
 
     # Number of training iterations to conduct
-    iterations = 1000
+    iterations = 2000
 
     # How many equally spaced save/validation checkpoints - 0 to disable
-    checkpoints = 50
+    checkpoints = 100
 
     # Number of samples to gather for a batch
-    batch_size = 8
+    batch_size = 4
 
     # The initial learning rate
-    learning_rate = 5e-4
+    learning_rate = 6e-4
 
     # The id of the gpu to use, if available
     gpu_id = 0
@@ -62,7 +63,7 @@ def config():
     seed = 0
 
     # Create the root directory for the experiment to hold train/transcribe/evaluate materials
-    expr_cache = os.path.join(tools.constants.HOME, 'Desktop', 'LHVQT', 'generated', 'experiments')
+    expr_cache = os.path.join(tools.constants.HOME, 'LHVQT', 'generated', 'experiments')
     root_dir = os.path.join(expr_cache, EX_NAME)
     os.makedirs(root_dir, exist_ok=True)
 
@@ -97,6 +98,27 @@ def visualize(model, i=None):
                                 decibels=True,
                                 include_negative=True,
                                 sort_by_centroid=True)
+
+
+def kld_scaling(iter):
+    """
+    Define a function with which to scale the KL-divergence loss term across iterations.
+
+    Parameters
+    ----------
+    iter : int
+      Current training iteration
+
+    Returns
+    ----------
+    scaling : float
+      KL-divergence scaling factor for the current iteration
+    """
+
+    #scaling = (max(min(iter - 250, 250), 0) / 500)
+    scaling = 1
+
+    return scaling
 
 
 class OnsetsFrames2LHVQT(OnsetsFrames2):
@@ -153,13 +175,8 @@ class OnsetsFrames2LHVQT(OnsetsFrames2):
             loss[tools.KEY_LOSS_KLD] = fb_module.time_conv.kld()
 
             # Compute the total loss and add it back to the output dictionary
-            #loss[tools.KEY_LOSS_TOTAL] += (max(min(self.iter - 250, 250), 0) / 500) * loss[tools.KEY_LOSS_KLD]
-            loss[tools.KEY_LOSS_TOTAL] += loss[tools.KEY_LOSS_KLD]
+            loss[tools.KEY_LOSS_TOTAL] += kld_scaling(self.iter) * loss[tools.KEY_LOSS_KLD]
             output[tools.KEY_LOSS] = loss
-
-            #if self.iter == 250:
-                # Turn on training mode for filterbank
-            #    fb_module.update = True
 
         return output
 
@@ -199,10 +216,10 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
                                            PitchListWrapper(profile=profile)])
 
     # Initialize the evaluation pipeline
-    evaluators = {tools.KEY_LOSS : LossWrapper(),
-                  tools.KEY_MULTIPITCH : MultipitchEvaluator(),
-                  tools.KEY_NOTE_ON : NoteEvaluator(),
-                  tools.KEY_NOTE_OFF : NoteEvaluator(0.2)}
+    evaluators = [LossWrapper(),
+                  MultipitchEvaluator(),
+                  NoteEvaluator(key=tools.KEY_NOTE_ON),
+                  NoteEvaluator(offset_ratio=0.2, key=tools.KEY_NOTE_OFF)]
     validation_evaluator = ComboEvaluator(evaluators, patterns=['loss', 'f1'])
 
     # Construct the MAESTRO splits
@@ -210,58 +227,75 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
     val_split = ['validation']
     test_split = ['test']
 
+    # Define expected path for raw datasets
+    base_dir_mstro = os.path.join('/', 'storage', 'frank', MAESTRO_V3.dataset_name())
+    base_dir_maps = os.path.join('/', 'storage', 'frank', MAPS.dataset_name())
+
+    # Define expected path for calculated features and ground-truth
+    features_gt_cache = os.path.join('/', 'storageNVME', 'frank')
+
     print('Loading training partition...')
 
     # Create a dataset corresponding to the training partition
-    mstro_train = MAESTRO_V1(splits=train_split,
+    mstro_train = MAESTRO_V3(base_dir=base_dir_mstro,
+                             splits=train_split,
                              hop_length=hop_length,
                              sample_rate=sample_rate,
                              data_proc=data_proc,
                              profile=profile,
                              num_frames=num_frames,
                              reset_data=reset_data,
-                             store_data=False)
+                             store_data=False,
+                             save_loc=features_gt_cache)
 
     # Create a PyTorch data loader for the dataset
     train_loader = DataLoader(dataset=mstro_train,
                               batch_size=batch_size,
                               shuffle=True,
-                              num_workers=0,
+                              num_workers=8,
                               drop_last=True)
 
     print('Loading validation partition...')
 
     # Create a dataset corresponding to the validation partition
-    mstro_val = MAESTRO_V1(splits=val_split,
+    mstro_val = MAESTRO_V3(base_dir=base_dir_mstro,
+                           splits=val_split,
                            hop_length=hop_length,
                            sample_rate=sample_rate,
                            data_proc=data_proc,
                            profile=profile,
                            num_frames=num_frames,
-                           store_data=False)
+                           reset_data=reset_data,
+                           store_data=False,
+                           save_loc=features_gt_cache)
 
     print('Loading testing partitions...')
 
     # Create a dataset corresponding to the MAESTRO testing partition
-    mstro_test = MAESTRO_V1(splits=test_split,
+    mstro_test = MAESTRO_V3(base_dir=base_dir_mstro,
+                            splits=test_split,
                             hop_length=hop_length,
                             sample_rate=sample_rate,
                             data_proc=data_proc,
                             profile=profile,
-                            store_data=False)
+                            reset_data=reset_data,
+                            store_data=False,
+                            save_loc=features_gt_cache)
 
     # Initialize the MAPS testing splits as the real piano data
     test_splits = ['ENSTDkAm', 'ENSTDkCl']
 
     # Create a dataset corresponding to the MAPS testing partition
     # Need to reset due to HTK Mel-Spectrogram spacing
-    maps_test = MAPS(splits=test_splits,
+    maps_test = MAPS(base_dir=base_dir_maps,
+                     splits=test_splits,
                      hop_length=hop_length,
                      sample_rate=sample_rate,
                      data_proc=data_proc,
                      profile=profile,
+                     reset_data=reset_data,
                      store_data=False,
-                     reset_data=True)
+                     save_loc=features_gt_cache)
 
     print('Initializing model...')
 
@@ -272,6 +306,9 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
 
     # Initialize a new optimizer for the model parameters
     optimizer = torch.optim.Adam(onsetsframes.parameters(), learning_rate)
+
+    # Initialize a multiplicative schedule for more stable performance
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9997)
 
     print('Training classifier...')
 
@@ -300,9 +337,6 @@ def onsets_frames_run(sample_rate, hop_length, num_frames, iterations, checkpoin
 
     # Add a save directory to the evaluators and reset the patterns
     validation_evaluator.set_save_dir(os.path.join(root_dir, 'results', 'MAESTRO'))
-
-    # Add a save directory to the evaluators and reset the patterns
-    validation_evaluator.set_save_dir(os.path.join(root_dir, 'results'))
     validation_evaluator.set_patterns(None)
 
     # Get the average results for the MAESTRO testing partition
