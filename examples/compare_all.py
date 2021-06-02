@@ -41,7 +41,7 @@ def main():
     print(f'Processing Time (Librosa): {time() - lib_start}')
 
     # Set the device for the convolutional implementations
-    device = 1
+    device = 0
     device = torch.device(f'cuda:{device}'
                           if torch.cuda.is_available() else 'cpu')
 
@@ -137,7 +137,7 @@ def main():
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
 
     # Index of harmonic within list to plot
-    h_idx = 0
+    h_idx = 1
 
     plt.sca(ax1)
     specshow(lib_hvqt[h_idx],

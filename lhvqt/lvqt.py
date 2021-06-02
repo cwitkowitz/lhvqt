@@ -10,16 +10,13 @@ from matplotlib import pyplot as plt
 from matplotlib import rcParams
 from abc import abstractmethod
 
+import soundfile as sf
 import numpy as np
+import warnings
 import librosa
 import torch
 import math
 import os
-
-# TODO - add label to frequency axis?
-# TODO - customize font for visualization?
-#rcParams['font.family'] = 'sans-serif'
-#rcParams['font.sans-serif'] = ['Tahoma']
 
 
 class _LVQT(torch.nn.Module):
@@ -129,6 +126,11 @@ class _LVQT(torch.nn.Module):
         self.pd1 = (pd1, self.basis.shape[1] - pd1)
         # Kernel must be as long as longest basis
         self.ks1 = self.basis.shape[1]
+
+        if self.hop_length % self.max_p != 0:
+            # Make sure max pooling divides evenly into hop length
+            warnings.warn(f'Max pooling {self.max_p} does not evenly divide into hop length {self.hop_length}.'
+                          '\nThis will ruin alignment and may cause unexpected behavior.')
 
         # Initialize max pooling to take 'max_p' responses per frame and aggregate with max operation
         self.mp = torch.nn.MaxPool2d((1, self.max_p))
@@ -443,12 +445,12 @@ class _LVQT(torch.nn.Module):
                 # Remove the left border
                 ax.axis['left'].set_visible(False)
 
-            # Minimize free space
-            fig.tight_layout()
-
             # Plot the real and imaginary weights separately
             ax.plot(real_weights[k], color='black', label='Real', alpha=0.75)
             ax.plot(imag_weights[k], color='purple', label='Imag', alpha=0.75)
+
+            # Minimize free space
+            fig.tight_layout()
 
             # Construct a path to save an image of the plot
             save_path = os.path.join(save_dir, f'f_{k}.jpg')
@@ -681,3 +683,51 @@ class _LVQT(torch.nn.Module):
         # Save and close the figure
         fig.savefig(save_path)
         plt.close(fig)
+
+    def sonify(self, save_dir, factor=1, idcs=None):
+        """
+        Represent each filter as audio and write to disk for listening.
+
+        Parameters
+        ----------
+        save_dir : string
+          Directory under which to save audio for each filter
+        factor : int
+          Time-stretch factor
+        idcs : list, ndarray or None (optional)
+          Specific filter indices to sonify rather than sonifying all of them
+        """
+
+        # Make sure the provided save directory exists
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Obtain the real part of the filterbank weights
+        weights = tensor_to_array(self.get_real_weights())
+        # Create ascending indices to loop through
+        filter_idcs = np.arange(self.n_bins)
+
+        if idcs is not None:
+            # Reduce the indices to those specified by user
+            filter_idcs = np.intersect1d(filter_idcs, idcs)
+
+        # Initialize an empty array to hold sequence of sonified filters
+        sequence = np.array([])
+
+        # Loop through the filter indices
+        for k in filter_idcs:
+            # Append the new "audio" to the sequence
+            sequence = np.append(sequence, weights[k])
+
+            # Construct a path to save the sonified filter
+            save_path = os.path.join(save_dir, f'f_{k}.flac')
+
+            # Write the sonified filter
+            filter_audio = librosa.effects.time_stretch(weights[k], 1 / factor)
+            sf.write(save_path, filter_audio, self.fs, format='flac')
+
+        # Construct a path to save the sequence of sonified filters
+        save_path = os.path.join(save_dir, f'sequence.flac')
+
+        # Write the sequence of sonified filters
+        sequence = librosa.effects.time_stretch(sequence, 1 / factor)
+        sf.write(save_path, sequence, self.fs, format='flac')

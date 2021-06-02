@@ -48,7 +48,7 @@ def main():
                          include_axis=True,
                          n_fft=None,
                          scale_freqs=False,
-                         decibels=False,
+                         decibels=True,
                          include_negative=False,
                          separate=True,
                          sort_by_centroid=False)

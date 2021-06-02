@@ -6,9 +6,9 @@ setup(
     author='Frank Cwitkowitz',
     author_email='fcwitkow@ur.rochester.edu',
     packages=['lhvqt'],
-    install_requires=['numpy', 'librosa', 'torch'],
-    version='0.3.0',
+    install_requires=['numpy', 'librosa', 'torch', 'matplotlib', 'soundfile'],
+    version='0.4.0',
     license='MIT',
-    description='Fine-tuneable filterbank front-end which implements a HVQT',
+    description='Frontend filterbank learning module with HVQT initialization capabilities',
     long_description=open('README.md').read()
 )

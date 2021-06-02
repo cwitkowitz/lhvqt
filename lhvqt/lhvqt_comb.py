@@ -123,3 +123,18 @@ class LHVQT_COMB(LHVQT):
 
         # Visualize the singular module
         self.tfs.lvqt.visualize(save_dir, **kwargs)
+
+    def sonify(self, save_dir, **kwargs):
+        """
+        Perform sonification steps.
+
+        Parameters
+        ----------
+        save_dir : string
+          Top-level directory to hold images of all plots
+        **kwargs : N/A
+          Arguments for generating plots
+        """
+
+        # Sonify the singular module
+        self.tfs.lvqt.sonify(save_dir, **kwargs)

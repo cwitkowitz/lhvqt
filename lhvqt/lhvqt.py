@@ -172,3 +172,25 @@ class LHVQT(torch.nn.Module):
             h_dir = os.path.join(save_dir, f'h_{self.harmonics[h]}') if len(self.harmonics) > 1 else save_dir
             # Visualize the harmonic
             lvqt_modules[h].visualize(h_dir, **kwargs)
+
+    def sonify(self, save_dir, **kwargs):
+        """
+        Perform sonification steps for each lower-level module.
+
+        Parameters
+        ----------
+        save_dir : string
+          Top-level directory to hold images of all plots
+        **kwargs : N/A
+          Arguments for generating audio
+        """
+
+        # Obtain a pointer to the lower-level modules
+        lvqt_modules = self.get_modules()
+
+        # Loop through harmonics
+        for h in range(len(self.harmonics)):
+            # Construct a path to the directory for the harmonic
+            h_dir = os.path.join(save_dir, f'h_{self.harmonics[h]}') if len(self.harmonics) > 1 else save_dir
+            # Sonify the harmonic
+            lvqt_modules[h].sonify(h_dir, **kwargs)

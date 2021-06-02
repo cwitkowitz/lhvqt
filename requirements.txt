@@ -1,4 +1,5 @@
 numpy>=1.17.2
 librosa>=0.8.0
-torch>=1.4.0
+torch==1.4.0
 matplotlib>= 3.4.1
+soundfile>=0.10.3
