@@ -548,6 +548,7 @@ class _LVQT(torch.nn.Module):
             ax.axis['bottom'].set_visible(False)
 
         # Minimize free space
+        # TODO - this will sometimes break in what I believe to be weird matplolib resizing corner cases
         fig.tight_layout()
 
         if scale_freqs:

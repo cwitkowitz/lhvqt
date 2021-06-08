@@ -19,16 +19,17 @@ pip install lhvqt
 ##### Cloning Repository
 Recommended for running examples or making experimental changes.
 ```
-git clone https://github.com/cwitkowitz/LHVQT
-pip install -e LHVQT
+git clone https://github.com/cwitkowitz/lhvqt
+pip install -e lhvqt
 ```
 
 # Usage
 Several examples of instantiation, inference, and visualization are provided under the ```examples``` sub-directory. A full-blown training, visualization, and evaluation example for stub can be found at https://github.com/cwitkowitz/stub.
 
-## Citation
-##### Stub 2021 Paper
+## Cite
+Please cite whichever is more relevant to your usage.
 
+##### Stub 2021 Paper
 ```
 @inproceedings{
   stub2021
@@ -36,7 +37,6 @@ Several examples of instantiation, inference, and visualization are provided und
 ```
 
 ##### Master's Thesis
-
 ```
 @mastersthesis{
   cwitkowitz2019end,
