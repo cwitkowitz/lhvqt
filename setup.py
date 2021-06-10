@@ -12,7 +12,7 @@ setup(
     packages=['lhvqt'],
     python_requires='>=3.7',
     install_requires=['numpy', 'librosa', 'torch==1.4.0', 'matplotlib', 'soundfile'],
-    version='0.4.0',
+    version='0.4.1',
     license='MIT',
     description='Frontend filterbank learning module with HVQT initialization capabilities',
     long_description=open('README.md').read(),
