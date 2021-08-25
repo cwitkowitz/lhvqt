@@ -35,7 +35,7 @@ Please cite whichever is more relevant to your usage.
   author  = {Frank Cwitkowitz and Mojtaba Heydari and Zhiyao Duan},
   title   = {Learning Sparse Analytic Filters for Piano Transcription},
   journal = {arXiv preprint arXiv:2108.10382},
-  year    = {2021},
+  year    = {2021}
 }
 ```
 
