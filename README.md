@@ -7,7 +7,7 @@ Implements a frontend filterbank learning module which can be initialized with c
  - Variational dropout for 1D convolutional layer (variational.py)
 
 The repository was created for my Master's Thesis, [End-to-End Music Transcription Using Fine-Tuned Variable-Q Filterbanks](https://scholarworks.rit.edu/theses/10143/).
-It has since been updated with various improvements, and to support my new work, [Stub](Stub).
+It has since been updated with various improvements, and to support my new work, [Learning Sparse Analytic Filters for Piano Transcription](https://arxiv.org/abs/2108.10382).
 
 # Installation
 ##### Standard (PyPI)
@@ -24,24 +24,26 @@ pip install -e lhvqt
 ```
 
 # Usage
-Several examples of instantiation, inference, and visualization are provided under the ```examples``` sub-directory. A full-blown training, visualization, and evaluation example for stub can be found at https://github.com/cwitkowitz/stub.
+Several examples of instantiation, inference, and visualization are provided under the ```examples``` sub-directory. A full-blown training, visualization, and evaluation example for piano transcription can be found at https://github.com/cwitkowitz/sparse-analytic-filters.
 
 ## Cite
 Please cite whichever is more relevant to your usage.
 
-##### Stub 2021 Paper
+##### arXiv Paper
 ```
-@inproceedings{
-  stub2021
+@article{cwitkowitz2021learning,
+  author  = {Frank Cwitkowitz and Mojtaba Heydari and Zhiyao Duan},
+  title   = {Learning Sparse Analytic Filters for Piano Transcription},
+  journal = {arXiv preprint arXiv:2108.10382},
+  year    = {2021},
 }
 ```
 
 ##### Master's Thesis
 ```
-@mastersthesis{
-  cwitkowitz2019end,
+@mastersthesis{cwitkowitz2019end,
   author  = {Cwitkowitz, Frank},
-  title   = {End-to-End Music Transcription Using Fine-Tuned Variable-Q Filterbanks},
+  title   = {End-to-End Music Transcription Using Fine-Tuned Variable-{Q} Filterbanks},
   school  = {Rochester Institute of Technology},
   year    = {2019}
 }

@@ -18,6 +18,8 @@ import torch
 import math
 import os
 
+# TODO - savefig() makes plotting slower than it could be. Can this be optimized?
+
 
 class _LVQT(torch.nn.Module):
     """
@@ -421,45 +423,54 @@ class _LVQT(torch.nn.Module):
         ax = SubplotZero(fig, 111)
         fig.add_subplot(ax)
 
+        if fix_scale:
+            # Make the y boundaries of each filter 10% of the maximum weight magnitude
+            ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
+
+        # Remove right, top, and bottom border
+        ax.axis['right'].set_visible(False)
+        ax.axis['top'].set_visible(False)
+        ax.axis['bottom'].set_visible(False)
+
+        if include_axis:
+            # Add X axes at origin
+            ax.axis['xzero'].set_visible(True)
+            # No X ticks
+            ax.set_xticks([])
+            # Remove space padding along X axis
+            ax.set_xlim([0, num_weights])
+            # Add a grid to the axis
+            ax.grid(axis='y')
+        else:
+            # Remove the left border
+            ax.axis['left'].set_visible(False)
+
         # Loop through the filter indices
         for k in filter_idcs:
-            if fix_scale:
-                # Make the y boundaries of each filter 10% of the maximum weight magnitude
-                ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
-
-            # Remove right, top, and bottom border
-            ax.axis['right'].set_visible(False)
-            ax.axis['top'].set_visible(False)
-            ax.axis['bottom'].set_visible(False)
-
             if include_axis:
-                # Add X axes at origin
-                ax.axis['xzero'].set_visible(True)
-                # Only add X tick to show number of weights in the plot
-                ax.set_xticks([num_weights])
-                # Remove space padding along X axis
-                ax.set_xlim([0, num_weights])
-                # Add a grid to the axis
-                ax.grid(axis='y')
+                # Add a title
+                ax.set_title(f'Filter Weights ($\mu = {k}$)')
+
+            # Obtain a list of lines on the plot
+            lines = ax.get_lines()
+
+            # Check if the real and imaginary lines have already been plotted
+            if len(lines):
+                # Update the existing real weights
+                lines[0].set_ydata(real_weights[k])
+                # Update the existing imaginary weights
+                lines[1].set_ydata(imag_weights[k])
             else:
-                # Remove the left border
-                ax.axis['left'].set_visible(False)
-
-            # Plot the real and imaginary weights separately
-            ax.plot(real_weights[k], color='black', label='Real', alpha=0.75)
-            ax.plot(imag_weights[k], color='purple', label='Imag', alpha=0.75)
-
-            # Minimize free space
-            fig.tight_layout()
+                # Make a new line for the real weights
+                ax.plot(real_weights[k], color='black', label='Real', alpha=0.75)
+                # Make a new line for the imaginary weights
+                ax.plot(imag_weights[k], color='purple', label='Imag', alpha=0.75)
 
             # Construct a path to save an image of the plot
             save_path = os.path.join(save_dir, f'f_{k}.jpg')
 
             # Save the figure
-            fig.savefig(save_path)
-
-            # Clear the plot in preparation for the next filter
-            ax.cla()
+            fig.savefig(save_path, bbox_inches='tight')
 
         # Close the figure
         plt.close(fig)
@@ -509,6 +520,11 @@ class _LVQT(torch.nn.Module):
         figsize = rcParams['figure.figsize']
         figsize = [(2 ** include_negative) * figsize[0], figsize[1]]
 
+        # Keep track of the default font size
+        default_font_size = rcParams['font.size']
+        # Change the font size temporarily
+        rcParams['font.size'] = 22
+
         # Create a figure and axis for plotting
         fig = plt.figure(figsize=figsize)
         ax = SubplotZero(fig, 111)
@@ -537,9 +553,19 @@ class _LVQT(torch.nn.Module):
         else:
             ax.set_ylim(top=1.1 * np.max(resp))
 
+        # Default the X axis label
+        xlabel = 'Frequency (Hz)'
+        if scale_freqs:
+            # Scale the frequencies to be within [-1, 1]
+            freqs = freqs / nyquist
+            # Update the X axis label
+            xlabel = 'Normalized Frequency'
+
         if include_axis:
             # Add an appropriate label to the Y axis
             ax.set_ylabel('dB') if decibels else ax.set_ylabel('A')
+            # Add X axis label
+            ax.set_xlabel(xlabel)
             # Add a grid to the axis
             ax.grid(axis='y')
         else:
@@ -547,26 +573,28 @@ class _LVQT(torch.nn.Module):
             ax.axis['left'].set_visible(False)
             ax.axis['bottom'].set_visible(False)
 
-        # Minimize free space
-        # TODO - this will sometimes break in what I believe to be weird matplolib resizing corner cases
-        fig.tight_layout()
-
-        if scale_freqs:
-            # Scale the frequencies to be within [-1, 1]
-            freqs = freqs / nyquist
-
         # Loop through the filter indices
         for k in filter_idcs:
-            # Plot the FFT response
-            ax.plot(freqs, resp[k], color='purple', label='FFT Response', alpha=0.75)
+            if include_axis:
+                # Add a title
+                ax.set_title(f'FFT Response ($\mu = {k}$)')
+
+            # Obtain a list of lines on the plot
+            lines = ax.get_lines()
+
+            # Determine if a new line should be created
+            if len(lines) and separate:
+                # Update the frequency response
+                lines[0].set_ydata(resp[k])
+            else:
+                # Plot the FFT response
+                ax.plot(freqs, resp[k], color='gray', label='FFT Response', alpha=0.75)
 
             if separate:
                 # Construct a path to save an image of the plot
                 save_path = os.path.join(save_dir, f'f_{k}.jpg')
                 # Save the figure
-                fig.savefig(save_path)
-                # Clear the plot in preparation for the next filter
-                ax.lines[0].remove()
+                fig.savefig(save_path, bbox_inches='tight')
 
         if not separate:
             # Construct a path to save an image of the plot
@@ -576,6 +604,9 @@ class _LVQT(torch.nn.Module):
 
         # Close the figure
         plt.close(fig)
+
+        # Change the font size back to the default
+        rcParams['font.size'] = default_font_size
 
     def visualize_freq_domain_fft_2d(self, save_path, idcs=None, n_fft=None, sort_by_centroid=False,
                                      include_axis=False, scale_freqs=False, include_negative=False):
@@ -647,6 +678,11 @@ class _LVQT(torch.nn.Module):
         figsize = rcParams['figure.figsize']
         figsize = [2 * figsize[0], (2 ** include_negative) * figsize[1]]
 
+        # Keep track of the default font size
+        default_font_size = rcParams['font.size']
+        # Change the font size temporarily
+        rcParams['font.size'] = 16
+
         # Create a figure and axis for plotting
         fig = plt.figure(figsize=figsize)
         ax = SubplotZero(fig, 111)
@@ -663,8 +699,14 @@ class _LVQT(torch.nn.Module):
         ax.axis['top'].set_visible(False)
 
         if include_axis:
-            # Only add X tick to show number of filters in plot
-            ax.set_xticks([len(filter_idcs)])
+            # Add a title
+            ax.set_title(f'FFT Response $\\forall$ Filters')
+            # No X ticks
+            ax.set_xticks([])
+            # Set the X axis label
+            ax.set_xlabel('Filter Index ($\mu$)')
+            # Set the Y axis label
+            ax.set_ylabel('Normalized Frequency' if scale_freqs else 'Frequency (Hz)')
             # Add a grid to the axis
             ax.grid(axis='y')
             # Add a colorbar to the figure
@@ -678,12 +720,12 @@ class _LVQT(torch.nn.Module):
             # Trim response for negative frequencies
             ax.set_ylim([0, y_bounds[1]])
 
-        # Minimize free space
-        fig.tight_layout()
-
         # Save and close the figure
-        fig.savefig(save_path)
+        fig.savefig(save_path, bbox_inches='tight')
         plt.close(fig)
+
+        # Change the font size back to the default
+        rcParams['font.size'] = default_font_size
 
     def sonify(self, save_dir, factor=1, idcs=None):
         """

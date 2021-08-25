@@ -94,7 +94,7 @@ class VariationalDropoutConv1d(nn.Conv1d):
             sqrt_delta = torch.sqrt(delta + EPSILON)
 
             # Sample from standard normal distribution
-            noise = Variable(torch.randn(*gamma.size())).to(in_feats.device)
+            noise = torch.cuda.FloatTensor(*gamma.size(), device=in_feats.device).normal_()
 
             # Add the Gaussian noise to the outgoing features
             out_feats = gamma + sqrt_delta * noise

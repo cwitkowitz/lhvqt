@@ -94,8 +94,6 @@ def torch_hilbert(x_real, n_fft=None):
     We end up with an analytic signal and return only the imaginary part. Most importantly,
     this procedure is fully differentiable. Adapted from the SciPy signal.hilbert function.
 
-    TODO - seems to be a tiny bit of energy in negative frequencies - numerical stability?
-
     Parameters
     ----------
     x_real : Tensor (F x T)
@@ -126,15 +124,14 @@ def torch_hilbert(x_real, n_fft=None):
         h[0] = 1
         h[1 : (n_fft + 1) // 2] = 2
 
-    # TODO - zero-pad x_real to n_fft or use new fft.rfft functions when released
     # Take the Fourier transform of the real part
-    Xf = torch.rfft(x_real, signal_ndim=1, onesided=False)
+    Xf = torch.fft.fft(x_real, n=n_fft, dim=-1)
     # Apply the transfer function to the Fourier transform
-    Xfh = Xf * h.unsqueeze(-1)
+    Xfh = Xf * h.unsqueeze(-2)
     # Take the inverse Fourier Transform to obtain the analytic signal
-    x_alyt = torch.ifft(Xfh, signal_ndim=1)
+    x_alyt = torch.fft.ifft(Xfh, dim=-1)
     # Take the imaginary part of the analytic signal to obtain the Hilbert transform
-    x_imag = x_alyt[..., -1]
+    x_imag = x_alyt.imag
 
     return x_imag
 
