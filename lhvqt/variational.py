@@ -20,7 +20,7 @@ class VariationalDropoutConv1d(nn.Conv1d):
     inspiration from https://github.com/kefirski/variational_dropout.
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride, threshold=math.inf, log_sigma2=-20):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, threshold=math.inf, log_sigma2=-10):
         """
         Initialize the convolutional layer and establish parameter defaults in function signature.
 

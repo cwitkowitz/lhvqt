@@ -56,6 +56,9 @@ class LHVQT_COMB(LHVQT):
             # Pad and add the weights to the summed harmonic weights
             harmonic_weights = harmonic_weights + nn.functional.pad(weights, pad=pad)
 
+        # Normalize the weights so that the maximum is 1
+        harmonic_weights = harmonic_weights / torch.max(harmonic_weights, dim=-1, keepdim=True)[0]
+
         # Replace the filterbank weights with the summer harmonic weights
         self.tfs.lvqt.time_conv.weight = torch.nn.Parameter(harmonic_weights)
 
