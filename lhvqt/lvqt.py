@@ -405,9 +405,6 @@ class _LVQT(torch.nn.Module):
         real_weights = tensor_to_array(self.get_real_weights())
         imag_weights = tensor_to_array(self.get_imag_weights())
 
-        # Determine the maximum weight magnitude for scaling
-        max_weight = max(np.max(np.abs(real_weights)), np.max(np.abs(imag_weights)))
-
         # Determine the amount of weights in each filter
         num_weights = real_weights.shape[-1]
 
@@ -424,6 +421,9 @@ class _LVQT(torch.nn.Module):
         fig.add_subplot(ax)
 
         if fix_scale:
+            # Determine the maximum weight magnitude for scaling
+            max_weight = max(np.max(np.abs(real_weights[filter_idcs])),
+                             np.max(np.abs(imag_weights[filter_idcs])))
             # Make the y boundaries of each filter 10% of the maximum weight magnitude
             ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
 
@@ -465,6 +465,12 @@ class _LVQT(torch.nn.Module):
                 ax.plot(real_weights[k], color='black', label='Real', alpha=0.75)
                 # Make a new line for the imaginary weights
                 ax.plot(imag_weights[k], color='purple', label='Imag', alpha=0.75)
+
+            if not fix_scale:
+                # Determine the maximum weight magnitude for scaling
+                max_weight = max(np.max(np.abs(real_weights[k])), np.max(np.abs(imag_weights[k])))
+                # Make the y boundaries of each filter 10% of the maximum weight magnitude
+                ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
 
             # Construct a path to save an image of the plot
             save_path = os.path.join(save_dir, f'f_{k}.jpg')
@@ -774,3 +780,106 @@ class _LVQT(torch.nn.Module):
         # Write the sequence of sonified filters
         sequence = librosa.effects.time_stretch(sequence, 1 / factor)
         sf.write(save_path, sequence, self.fs, format='flac')
+
+    def get_activations(self, save_dir, audio, idcs=None, fix_scale=False, include_axis=False):
+        """
+        Obtain filter activations for an excerpt of audio.
+
+        Parameters
+        ----------
+        save_dir : string
+          Directory under which to save activation figures
+        audio : tensor
+          Excerpt of audio to analyze
+        idcs : list, ndarray or None (optional)
+          Specific filter indices to analyze rather than analyzing all of them
+        fix_scale : bool
+          Whether to place all filters on the same amplitude scale
+        include_axis : bool
+          Whether to add X and Y axis and a grid along the Y axis
+        """
+
+        # Make sure the provided save directory exists
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Add a batch and channel dimension
+        audio = audio.reshape(1, 1, -1)
+
+        # Feed the audio through the filterbank
+        activations = tensor_to_array(self(audio)[0])
+
+        # Create ascending indices to loop through
+        filter_idcs = np.arange(self.n_bins)
+
+        if idcs is not None:
+            # Reduce the indices to those specified by user
+            filter_idcs = np.intersect1d(filter_idcs, idcs)
+
+        # Determine the number of frames produced for the audio
+        num_frames = activations.shape[-1]
+
+        # Determine the amount of time represented by the frames
+        times = np.arange(num_frames) * self.hop_length / self.fs
+
+        # Scale the X axis to be twice the length of Y axis
+        figsize = rcParams['figure.figsize']
+        figsize = [2 * figsize[0], figsize[1]]
+
+        # Create a figure and axis for plotting
+        fig = plt.figure(figsize=figsize)
+        ax = SubplotZero(fig, 111)
+        fig.add_subplot(ax)
+
+        if fix_scale:
+            # Determine the maximum weight magnitude for scaling
+            max_weight = np.max(np.abs(activations[filter_idcs]))
+            # Make the y boundaries of each filter 10% of the maximum weight magnitude
+            ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
+
+        # Remove right, top, and bottom border
+        ax.axis['right'].set_visible(False)
+        ax.axis['top'].set_visible(False)
+
+        if include_axis:
+            # Remove space padding along X axis
+            ax.set_xlim([0, times[-1]])
+            # Add a grid to the axis
+            ax.grid(axis='y')
+            # Add a label to the X axis
+            ax.set_xlabel('Times (s)')
+        else:
+            # Remove the left and botton border
+            ax.axis['left'].set_visible(False)
+            ax.axis['bottom'].set_visible(False)
+
+        # Loop through the filter indices
+        for k in filter_idcs:
+            if include_axis:
+                # Add a title
+                ax.set_title(f'Filter Activation ($\mu = {k}$)')
+
+            # Obtain a list of lines on the plot
+            lines = ax.get_lines()
+
+            # Check if a line has already been plotted
+            if len(lines):
+                # Update the existing line
+                lines[0].set_ydata(activations[k])
+            else:
+                # Make a new line for the activations
+                ax.plot(times, activations[k], color='black', alpha=0.75)
+
+            if not fix_scale:
+                # Determine the maximum weight magnitude for scaling
+                max_weight = np.max(np.abs(activations[k]))
+                # Make the y boundaries of each filter 10% of the maximum weight magnitude
+                ax.set_ylim([-1.1 * max_weight, 1.1 * max_weight])
+
+            # Construct a path to save an image of the plot
+            save_path = os.path.join(save_dir, f'f_{k}.jpg')
+
+            # Save the figure
+            fig.savefig(save_path, bbox_inches='tight')
+
+        # Close the figure
+        plt.close(fig)

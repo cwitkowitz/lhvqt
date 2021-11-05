@@ -2,6 +2,7 @@
 
 # My imports
 from .lhvqt import *
+from .utils import EPSILON
 
 # Regular imports
 import torch.nn as nn
@@ -57,7 +58,7 @@ class LHVQT_COMB(LHVQT):
             harmonic_weights = harmonic_weights + nn.functional.pad(weights, pad=pad)
 
         # Normalize the weights so that the maximum is 1
-        harmonic_weights = harmonic_weights / torch.max(harmonic_weights, dim=-1, keepdim=True)[0]
+        harmonic_weights = harmonic_weights / (torch.max(harmonic_weights, dim=-1, keepdim=True)[0] + EPSILON)
 
         # Replace the filterbank weights with the summer harmonic weights
         self.tfs.lvqt.time_conv.weight = torch.nn.Parameter(harmonic_weights)
