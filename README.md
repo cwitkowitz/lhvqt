@@ -29,22 +29,22 @@ Several examples of instantiation, inference, and visualization are provided und
 ## Cite
 Please cite whichever is more relevant to your usage.
 
-##### arXiv Paper
+##### SMC 2022 Paper
 ```
-@article{cwitkowitz2021learning,
-  author  = {Frank Cwitkowitz and Mojtaba Heydari and Zhiyao Duan},
-  title   = {Learning Sparse Analytic Filters for Piano Transcription},
-  journal = {arXiv preprint arXiv:2108.10382},
-  year    = {2021}
+@inproceedings{cwitkowitz2022learning,
+  title     = {Learning Sparse Analytic Filters for Piano Transcription},
+  author    = {Frank Cwitkowitz and Mojtaba Heydari and Zhiyao Duan},
+  year      = 2022,
+  booktitle = {Proceedings of Sound and Music Computing Conference (SMC)}
 }
 ```
 
 ##### Master's Thesis
 ```
 @mastersthesis{cwitkowitz2019end,
-  author  = {Cwitkowitz, Frank},
   title   = {End-to-End Music Transcription Using Fine-Tuned Variable-{Q} Filterbanks},
-  school  = {Rochester Institute of Technology},
-  year    = {2019}
+  author  = {Cwitkowitz, Frank},
+  year    = 2019,
+  school  = {Rochester Institute of Technology}
 }
 ```
