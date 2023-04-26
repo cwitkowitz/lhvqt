@@ -8,83 +8,69 @@ import torch
 EPSILON = torch.finfo(torch.float32).eps
 
 
-def torch_amplitude_to_db(feats, amin=1e-10, top_db=80.0, to_prob=False):
+def torch_amplitude_to_db(feats, amin=1e-5, top_db=80.0, to_prob=False):
     """
-    Take the log of a time-frequency representation with differentiable
-    PyTorch functions, scaling values to be between 0 and 1. Adapted from
-    the Librosa amplitude_to_db function.
+    Convert amplitude features to decibels or probability-like
+    values sample-wise with differentiable PyTorch functions.
+
+    Adapted from the Librosa amplitude_to_db function.
 
     Parameters
     ----------
     feats : Tensor (B x H x F x T) or (B x F x T)
-      Set of amplitude features,
+      Set of magnitude of amplitude features,
       B - batch size
       H - number of harmonics (a.k.a. channels)
       F - dimensionality of features
       T - number of time steps (frames)
     amin : float
-      Minimum amplitude possible within a time-frequency bin
+      Threshold for minimum amplitude
     top_db : float
-      Maximum difference from dB ceiling (defines dB floor)
+      Maximum difference from dB ceiling
     to_prob : bool
-      Scale decibel values to be between 0 and 1
+      Convert decibels to probability-like features
 
     Returns
     ----------
-    log_feats : Tensor (B x H x F x T) or (B x F x T)
-      Set of dB or probability features
+    decibels : Tensor (B x H x F x T) or (B x F x T)
+      Set of decibel or probability-like features
     """
 
-    # Perform processing on a copy of original features
-    feats_copy = feats.clone()
+    # Determine the number of samples in the batch
+    B = feats.size(0)
 
-    # Get handles for the feature dimensionality
-    B, H, F, T = feats.size(0), 1, feats.size(-2), feats.size(-1)
+    # Make sure the features represent magnitude
+    magnitude = torch.abs(feats.clone())
 
-    # Collapse the channel dimension if it exists
-    if len(feats.size()) > 3:
-        H = feats.size(1)
-        feats_copy = feats_copy.view(B * H, F, T)
+    # Convert magnitude to power
+    power = torch.square(magnitude)
 
-    # Get handle for pseudo batch size
-    PB = B * H
+    # Get reference values for each sample in the batch
+    ref_values = power.reshape(B, -1).max(dim=-1)[0]
 
-    # Convert amplitude features to power
-    power = torch.abs(feats_copy) ** 2
+    # Add dimensions to reference values for broadcasting
+    ref_values = ref_values.view((-1,) + tuple([1] * (len(feats.shape) - 1)))
 
-    # Get reference values (maximums) from power spectrogram for each 2D transform
-    ref_value = torch.max(power.view(PB, -1), dim=-1)[0]
+    # Convert threshold to power
+    amin = torch.tensor(amin) ** 2
 
-    # Clamp power spectrogram at specified minimum - effectively max(amin, power)
-    power[power < amin] = amin
+    # Convert power to dB, clamping power at specified threshold
+    log_feats = 10.0 * torch.log10(torch.maximum(amin, power))
 
-    # Convert power to dB
-    log_feats = 10.0 * torch.log10(power)
+    # Combine with previous operation to perform 10 * log10(power / ref)
+    log_feats -= 10.0 * torch.log10(torch.maximum(amin, ref_values))
 
-    # Make sure reference values are above minimum amplitude
-    amin = torch.Tensor([amin] * PB).to(power.device)
-    amin[amin < ref_value] = ref_value[amin < ref_value]
-    # Add dimensions for broadcasting
-    amin = amin.unsqueeze(-1).unsqueeze(-1)
+    # Clamp all decibels at the corresponding floor
+    decibels = torch.maximum(log_feats, -torch.tensor(top_db))
 
-    # Combined with previous log, we are performing 10 * log10(power / ref)
-    log_feats = log_feats - 10.0 * torch.log10(amin)
-
-    # Collapse the last two dimensions temporarily to make the following easier
-    log_feats = log_feats.view(PB, -1)
-    # Determine the dB floor for each 2D transform
-    dB_floor = (torch.max(log_feats, dim=-1)[0] - top_db).unsqueeze(-1)
-    # Clamp the values at the specified dB floor
-    log_feats[log_feats < dB_floor] = dB_floor.repeat(1, F * T)[log_feats < dB_floor]
+    # Make sure features for silence are at decibel floor
+    decibels[ref_values.squeeze() == 0.] = -top_db
 
     if to_prob:
         # Scale values and offset to be between 0 and 1
-        log_feats = (log_feats / top_db) + 1.0
+        decibels = (decibels / top_db) + 1.0
 
-    # Reshape the log-scaled features using the original feature dimensions
-    log_feats = log_feats.view(feats.size())
-
-    return log_feats
+    return decibels
 
 
 def torch_hilbert(x_real, n_fft=None):

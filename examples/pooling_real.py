@@ -29,7 +29,7 @@ def main():
     harmonics = [0.5, 1, 2, 3, 4, 5]
 
     # Load an example piece of audio
-    y, sr = librosa.load(librosa.util.example_audio_file())
+    y, sr = librosa.load(librosa.ex('trumpet'))
 
     # Calculate the HVQT using librosa
     lib_start = time()
@@ -43,7 +43,7 @@ def main():
     lib_hvqt = librosa.amplitude_to_db(lib_hvqt, ref=np.max)
 
     # Set the device for the convolutional implementations
-    device = 1
+    device = 0
     device = torch.device(f'cuda:{device}'
                           if torch.cuda.is_available() else 'cpu')
 

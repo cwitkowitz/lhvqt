@@ -33,7 +33,7 @@ def main():
     harmonics = [0.5, 1, 2, 3, 4, 5]
 
     # Load an example piece of audio
-    y, sr = librosa.load(librosa.util.example_audio_file())
+    y, sr = librosa.load(librosa.ex('trumpet'))
 
     # Calculate the HVQT using librosa
     lib_start = time()
