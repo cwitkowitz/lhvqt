@@ -42,9 +42,7 @@ class LVQT(_LVQT):
 
         if not self.random:
             # Get the real weights from the complex valued bases
-            real_weights = np.real(self.basis)
-            # Add a channel dimension to the weights
-            real_weights = torch.Tensor(real_weights).view(nf_out, 1, self.ks1)
+            real_weights = torch.real(self.basis).unsqueeze(-2)
             # Manually set the Conv1d parameters to the weights
             self.time_conv.weight = torch.nn.Parameter(real_weights)
 

@@ -5,7 +5,6 @@ from .lvqt import _LVQT
 from .variational import *
 
 # Regular imports
-import numpy as np
 import torch
 
 
@@ -43,13 +42,10 @@ class LVQT(_LVQT):
                                              bias=False)
 
         if not self.random:
-            # Split the complex valued bases into real and imaginary weights
-            real_weights, imag_weights = np.real(self.basis), np.imag(self.basis)
-            # Zip them together as separate channels so both components of each filter are adjacent
-            complex_weights = np.array([[real_weights[i]] + [imag_weights[i]]
-                                        for i in range(self.n_bins)])
+            # Convert complex bases to real and imaginary components
+            complex_weights = torch.view_as_real(self.basis).transpose(-1, -2)
             # View the real/imag channels as independent filters
-            complex_weights = torch.Tensor(complex_weights).view(nf_out, 1, self.ks1)
+            complex_weights = complex_weights.reshape(nf_out, 1, self.ks1)
             # Manually set the Conv1d parameters with the real/imag weights
             self.time_conv.weight = torch.nn.Parameter(complex_weights)
 

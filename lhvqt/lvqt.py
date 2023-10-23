@@ -5,7 +5,7 @@ from .utils import *
 
 # Regular imports
 from mpl_toolkits.axisartist.axislines import SubplotZero
-from librosa.filters import constant_q
+from librosa.filters import wavelet
 from matplotlib import pyplot as plt
 from matplotlib import rcParams
 from abc import abstractmethod
@@ -102,32 +102,33 @@ class _LVQT(torch.nn.Module):
         band_bounds = center_freqs * (1 + 0.5 * librosa.filters.window_bandwidth('hann') / Q)
         # Determine the number of invalid filters (past Nyquist)
         num_invalid = int(np.sum(band_bounds > fs / 2.0))
+        # Identify corresponding number of valid filters
+        num_valid = self.n_bins - num_invalid
 
         # Get complex bases and their respective lengths for a variable-Q transform
-        basis, lengths = constant_q(sr=fs,
-                                    fmin=fmin,
-                                    n_bins=n_bins - num_invalid,
-                                    bins_per_octave=bins_per_octave,
-                                    gamma=gamma,
-                                    pad_fft=False,
-                                    norm=None)
+        basis, lengths = wavelet(freqs=center_freqs[:num_valid],
+                                 sr=fs,
+                                 gamma=gamma,
+                                 pad_fft=False,
+                                 norm=None)
+
+        # Convert weights and lengths to tensors
+        basis, lengths = torch.from_numpy(basis), torch.from_numpy(lengths)
 
         # Fill in space leftover from invalid filters with zeros
-        zero_filters = np.zeros((num_invalid, basis.shape[-1]))
-        zero_lengths = np.zeros(num_invalid)
+        zero_filters = torch.zeros((num_invalid, basis.size(-1)))
+        zero_lengths = torch.zeros(num_invalid)
 
         # Append any zero filters to the bases
-        self.basis = np.concatenate((basis, zero_filters), axis=0)
-        self.lengths = np.concatenate((lengths, zero_lengths), axis=0)
+        self.basis = torch.concatenate((basis, zero_filters))
+        self.lengths = torch.concatenate((lengths, zero_lengths))
 
         # Stride the amount of samples necessary to take 'max_p' responses per frame
         self.sd1 = self.hop_length // self.max_p
-        # Padding to start centered around the first real sample,
-        # and end centered around the last real sample
-        pd1 = self.basis.shape[1] // 2
-        self.pd1 = (pd1, self.basis.shape[1] - pd1)
         # Kernel must be as long as longest basis
-        self.ks1 = self.basis.shape[1]
+        self.ks1 = self.basis.size(-1)
+        # Padding centers first sample and (up to) last sample
+        self.pd1 = (self.ks1 // 2, self.ks1 - self.ks1 // 2)
 
         if self.hop_length % self.max_p != 0:
             # Make sure max pooling divides evenly into hop length
