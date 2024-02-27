@@ -11,6 +11,7 @@ from matplotlib import rcParams
 from abc import abstractmethod
 
 import soundfile as sf
+import torch.nn as nn
 import numpy as np
 import warnings
 import librosa
@@ -19,9 +20,10 @@ import math
 import os
 
 # TODO - savefig() makes plotting slower than it could be. Can this be optimized?
+# TODO - call this Base_Real, make it usable, and make similar Base_Complex?
 
 
-class _LVQT(torch.nn.Module):
+class _LVQT(nn.Module):
     """
     Abstract class to implement common functionality across LVQT variants.
     """
@@ -65,8 +67,7 @@ class _LVQT(torch.nn.Module):
           Doubles as switch (0 to disable) for variational dropout and initial value of log_sigma ^ 2
         """
 
-        # Load PyTorch Module properties
-        super(_LVQT, self).__init__()
+        nn.Module.__init__(self)
 
         # Make parameters accessible
         self.fs = fs
@@ -81,47 +82,27 @@ class _LVQT(torch.nn.Module):
         self.batch_norm = batch_norm
         self.var_drop = var_drop
 
-        # Default the minimum frequency
         if fmin is None:
-            # Note C1
+            # Default minimum frequency to C1
             fmin = librosa.note_to_hz('C1')
         self.fmin = fmin
 
-        # Default gamma using the procedure defined in
-        # librosa.filters.constant_q.vqt documentation
-        if gamma is None:
-            alpha = 2.0 ** (1.0 / bins_per_octave) - 1
-            gamma = 24.7 * alpha / 0.108
-        self.gamma = gamma
-
-        # Determine the center frequencies of initialized basis functions
+        # Determine center frequencies of specified geometric progression
         center_freqs = fmin * (2.0 ** (np.arange(n_bins) / bins_per_octave))
-        # Calculate the constant Q factor necessary for the chosen resolution
-        Q = 1 / (2.0 ** (1.0 / bins_per_octave) - 1.0)
-        # Determine the upper boundary of each filters' bandwidth
-        band_bounds = center_freqs * (1 + 0.5 * librosa.filters.window_bandwidth('hann') / Q)
-        # Determine the number of invalid filters (past Nyquist)
-        num_invalid = int(np.sum(band_bounds > fs / 2.0))
-        # Identify corresponding number of valid filters
-        num_valid = self.n_bins - num_invalid
 
-        # Get complex bases and their respective lengths for a variable-Q transform
-        basis, lengths = wavelet(freqs=center_freqs[:num_valid],
-                                 sr=fs,
-                                 gamma=gamma,
-                                 pad_fft=False,
-                                 norm=None)
+        # Compute complex bases for a variable-Q transform
+        basis, _ = wavelet(freqs=center_freqs,
+                           sr=fs,
+                           window='hann',
+                           filter_scale=1,
+                           pad_fft=False,
+                           norm=None,
+                           gamma=gamma)
 
-        # Convert weights and lengths to tensors
-        basis, lengths = torch.from_numpy(basis), torch.from_numpy(lengths)
+        # Represent bases as PyTorch Tensors
+        self.basis = torch.from_numpy(basis)
 
-        # Fill in space leftover from invalid filters with zeros
-        zero_filters = torch.zeros((num_invalid, basis.size(-1)))
-        zero_lengths = torch.zeros(num_invalid)
-
-        # Append any zero filters to the bases
-        self.basis = torch.concatenate((basis, zero_filters))
-        self.lengths = torch.concatenate((lengths, zero_lengths))
+        # TODO - initialize time_conv here, overwrite weights later
 
         # Stride the amount of samples necessary to take 'max_p' responses per frame
         self.sd1 = self.hop_length // self.max_p

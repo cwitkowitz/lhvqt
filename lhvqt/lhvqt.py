@@ -51,6 +51,7 @@ class LHVQT(torch.nn.Module):
             lvqt = LVQT
 
         # Create a PyTorch Module to hold LVQTs
+         # TODO - use ModuleList
         self.tfs = torch.nn.Module()
 
         # Loop through harmonics

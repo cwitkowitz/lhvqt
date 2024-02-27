@@ -11,7 +11,7 @@ setup(
     packages=find_packages(),
     python_requires='>=3.7',
     install_requires=['numpy', 'librosa', 'torch', 'matplotlib', 'soundfile'],
-    version='0.5.3',
+    version='0.5.4',
     license='MIT',
     description='Frontend filterbank learning module with HVQT initialization capabilities',
     long_description=open('README.md').read(),
